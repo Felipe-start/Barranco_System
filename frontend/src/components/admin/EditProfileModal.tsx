@@ -64,7 +64,8 @@ export function EditProfileModal({ isOpen, onClose, user, onUpdate }: EditProfil
     setUploadSuccess(false)
     
     try {
-      let newAvatarUrl
+      let newAvatarUrl: string | null = null
+      
       if (user.rol === 'bartender') {
         const bartender = await userService.getBartenderByUsuarioId(user.id)
         if (bartender) {
@@ -79,7 +80,11 @@ export function EditProfileModal({ isOpen, onClose, user, onUpdate }: EditProfil
         newAvatarUrl = await userService.uploadAdminFoto(file, user.id)
       }
       
-      setAvatarUrl(newAvatarUrl)
+      // Asegurar que newAvatarUrl no sea undefined
+      if (newAvatarUrl) {
+        setAvatarUrl(newAvatarUrl)
+      }
+      
       setUploadSuccess(true)
       
       toast({
