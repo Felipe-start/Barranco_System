@@ -218,49 +218,65 @@ export default function RecipeForm({ recipe, onSuccess, onCancel }: RecipeFormPr
 
       <div className="space-y-3">
         <Label>Ingredientes</Label>
-        {fields.map((field, index) => (
-          <div key={field.id} className="flex gap-2 items-end">
-            <div className="flex-1">
-              <Select 
-                value={watch(`ingredientes.${index}.producto_id`)} 
-                onValueChange={(value) => setValue(`ingredientes.${index}.producto_id`, value)}
+        {fields.map((field, index) => {
+          // Obtener el error del ingrediente de forma segura
+          const ingredientError = errors.ingredientes?.[index]
+          const productIdError = ingredientError?.producto_id
+          
+          return (
+            <div key={field.id} className="flex gap-2 items-end">
+              <div className="flex-1">
+                <Select 
+                  value={watch(`ingredientes.${index}.producto_id`)} 
+                  onValueChange={(value) => setValue(`ingredientes.${index}.producto_id`, value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Producto" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {products.map(p => (
+                      <SelectItem key={p.id} value={p.id}>{p.nombre}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {productIdError && (
+                  <p className="text-xs text-red-500">{productIdError.message}</p>
+                )}
+              </div>
+              <div className="w-20">
+                <Input 
+                  type="number" 
+                  placeholder="Cant." 
+                  {...register(`ingredientes.${index}.cantidad`, { valueAsNumber: true })}
+                />
+                {ingredientError?.cantidad && (
+                  <p className="text-xs text-red-500">{ingredientError.cantidad.message}</p>
+                )}
+              </div>
+              <div className="w-20">
+                <Input 
+                  placeholder="Unidad" 
+                  {...register(`ingredientes.${index}.unidad`)}
+                />
+                {ingredientError?.unidad && (
+                  <p className="text-xs text-red-500">{ingredientError.unidad.message}</p>
+                )}
+              </div>
+              <Button 
+                type="button" 
+                variant="ghost" 
+                size="sm" 
+                className="text-red-500 hover:text-red-700"
+                onClick={() => remove(index)}
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Producto" />
-                </SelectTrigger>
-                <SelectContent>
-                  {products.map(p => (
-                    <SelectItem key={p.id} value={p.id}>{p.nombre}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {errors.ingredientes?.[index]?.producto_id && 
-                <p className="text-xs text-red-500">{errors.ingredientes[index].producto_id?.message}</p>}
+                <X className="h-4 w-4" />
+              </Button>
             </div>
-            <div className="w-20">
-              <Input 
-                type="number" 
-                placeholder="Cant." 
-                {...register(`ingredientes.${index}.cantidad`, { valueAsNumber: true })}
-              />
-            </div>
-            <div className="w-20">
-              <Input 
-                placeholder="Unidad" 
-                {...register(`ingredientes.${index}.unidad`)}
-              />
-            </div>
-            <Button 
-              type="button" 
-              variant="ghost" 
-              size="sm" 
-              className="text-red-500 hover:text-red-700"
-              onClick={() => remove(index)}
-            >
-              ✕
-            </Button>
-          </div>
-        ))}
+          )
+        })}
+        {errors.ingredientes?.message && (
+          <p className="text-xs text-red-500">{errors.ingredientes.message}</p>
+        )}
         <Button 
           type="button" 
           variant="outline" 
@@ -269,7 +285,6 @@ export default function RecipeForm({ recipe, onSuccess, onCancel }: RecipeFormPr
         >
           + Agregar Ingrediente
         </Button>
-        {errors.ingredientes && <p className="text-xs text-red-500">{errors.ingredientes.message}</p>}
       </div>
 
       <div className="flex justify-end gap-2 pt-4">

@@ -420,6 +420,36 @@ export const userService = {
       await supabase.from('usuarios').update({ activo: true }).eq('id', userId)
     }
 
-    return { userId, email: data.email, rol: data.rol, nip: nipGenerado || undefined }
+    return { 
+      userId, 
+      email: data.email, 
+      rol: data.rol,
+      nip: nipGenerado || undefined 
+    }
+  },
+
+  async getCounters() {
+    const supabase = createClient()
+    const { count: bartenders } = await supabase
+      .from('bartenders')
+      .select('*', { count: 'exact', head: true })
+      .eq('activo', true)
+    
+    const { count: meseros } = await supabase
+      .from('meseros')
+      .select('*', { count: 'exact', head: true })
+      .eq('activo', true)
+    
+    const { count: admins } = await supabase
+      .from('usuarios')
+      .select('*', { count: 'exact', head: true })
+      .eq('rol', 'admin')
+      .eq('activo', true)
+    
+    return {
+      bartenders: bartenders || 0,
+      meseros: meseros || 0,
+      admins: admins || 0
+    }
   }
 }

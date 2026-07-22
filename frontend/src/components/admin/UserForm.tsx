@@ -86,7 +86,6 @@ export default function UserForm({ onSuccess, onCancel, defaultValues, isEdit = 
           nombre: data.nombre,
           apellido: data.apellido,
           pin: data.pin,
-          telefono: data.telefono,
           phone_number: data.telefono,
         })
         setSuccess('✅ Usuario actualizado exitosamente')
@@ -94,13 +93,10 @@ export default function UserForm({ onSuccess, onCancel, defaultValues, isEdit = 
         // Crear nuevo usuario
         await userService.createFullUser({
           email: data.email,
-          password: data.password,
           nombre: data.nombre,
           apellido: data.apellido,
           rol: data.rol,
-          pin: data.pin,
           telefono: data.telefono,
-          fecha_contratacion: data.fecha_contratacion,
         })
         setSuccess('✅ Usuario creado exitosamente')
       }

@@ -80,7 +80,7 @@ export function EditProfileModal({ isOpen, onClose, user, onUpdate }: EditProfil
         newAvatarUrl = await userService.uploadAdminFoto(file, user.id)
       }
       
-      // Asegurar que newAvatarUrl no sea undefined
+      // Solo actualizar si tenemos una URL válida
       if (newAvatarUrl) {
         setAvatarUrl(newAvatarUrl)
       }
@@ -96,6 +96,7 @@ export function EditProfileModal({ isOpen, onClose, user, onUpdate }: EditProfil
       setTimeout(() => setUploadSuccess(false), 3000)
       
     } catch (error: any) {
+      console.error('Error uploading image:', error)
       toast({
         title: 'Error',
         description: error.message || 'Error al subir la foto',
@@ -172,6 +173,7 @@ export function EditProfileModal({ isOpen, onClose, user, onUpdate }: EditProfil
       }, 1500)
 
     } catch (error: any) {
+      console.error('Error updating profile:', error)
       toast({
         title: 'Error',
         description: error.message || 'Error al actualizar el perfil',
