@@ -1,461 +1,455 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useAuth } from '@/hooks/useAuth'
-import { useGreeting } from '@/hooks/useGreeting'
-import { userService } from '@/lib/services/userService'
-import { createClient } from '@/lib/supabase/client'
-import { recipeService } from '@/lib/services/recipeService'
-import {
-  Search, Bell, LogOut, TrendingUp, DollarSign, AlertTriangle,
-  Coffee, Plus, Clock, Menu, Eye, Utensils
+import { useRouter } from 'next/navigation'
+import { 
+  LogOut, Bell, Coffee, Clock, CheckCircle, 
+  Loader2, TrendingUp, DollarSign, Users, 
+  XCircle, Plus, Minus, Trash2, Edit
 } from 'lucide-react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Progress } from '@/components/ui/progress'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Label } from '@/components/ui/label'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { useAuth } from '@/hooks/useAuth'
+import { useToast } from '@/hooks/use-toast'
+import { createClient } from '@/lib/supabase/client'
+import { NotificationBell } from '@/components/bartender/NotificationBell'
+import { orderService } from '@/lib/services/orderService'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { wasteService } from '@/lib/services/wasteService'
-import { AvatarWithViewer } from '@/components/ui/AvatarWithViewer'
+import { Label } from '@/components/ui/label'
 
-export default function BartenderDashboardPage() {
+export default function BartenderDashboard() {
   const { user, logout } = useAuth()
-  const { greeting, timeIcon } = useGreeting()
+  const router = useRouter()
+  const { toast } = useToast()
   const supabase = createClient()
-  const [recipes, setRecipes] = useState<any[]>([])
+  const [pedidos, setPedidos] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [selectedRecipe, setSelectedRecipe] = useState<any>(null)
-  const [bartenderId, setBartenderId] = useState<string | null>(null)
-  const [products, setProducts] = useState<any[]>([])
-  const [userData, setUserData] = useState<any>(null)
-  const [shiftStats, setShiftStats] = useState({ ventas: 0, mermas: 0, bebidas: 0, eficiencia: 0 })
-  const [showWasteDialog, setShowWasteDialog] = useState(false)
-  const [wasteData, setWasteData] = useState({ producto_id: '', cantidad: 0, motivo: 'caida', descripcion: '', tipo: 'no_esperada' })
+  const [isMermaOpen, setIsMermaOpen] = useState(false)
+  const [selectedPedido, setSelectedPedido] = useState<any>(null)
+  const [mermaData, setMermaData] = useState({
+    producto: '',
+    cantidad: 0,
+    motivo: ''
+  })
+  const [stats, setStats] = useState({
+    pendientes: 0,
+    preparando: 0,
+    listos: 0,
+    total: 0
+  })
 
   useEffect(() => {
     if (user) {
-      loadData()
+      fetchPedidos()
+      const subscription = supabase
+        .channel('pedidos_changes')
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'pedidos'
+        }, () => {
+          fetchPedidos()
+        })
+        .subscribe()
+
+      return () => {
+        subscription.unsubscribe()
+      }
     }
   }, [user])
 
-  const loadData = async () => {
+  const fetchPedidos = async () => {
     setLoading(true)
     try {
-      // Cargar datos del usuario
-      const userData = await userService.getById(user?.id || '')
-      setUserData(userData)
-
-      const { data: bartenderData } = await supabase
-        .from('bartenders')
-        .select('id')
-        .eq('usuario_id', user?.id)
-        .maybeSingle()
+      const data = await orderService.getOrdersByEstado()
+      setPedidos(data || [])
       
-      if (bartenderData) setBartenderId(bartenderData.id)
-
-      const recipesData = await recipeService.getAll()
-      setRecipes(recipesData || [])
-
-      const { data: productsData } = await supabase
-        .from('productos')
-        .select('id, nombre, marca')
-        .eq('activo', true)
-        .order('nombre')
-      setProducts(productsData || [])
-
-      await loadStats()
+      const pendientes = data.filter((o: any) => o.estado === 'pendiente').length
+      const preparando = data.filter((o: any) => o.estado === 'preparando').length
+      const listos = data.filter((o: any) => o.estado === 'listo').length
+      
+      setStats({
+        pendientes,
+        preparando,
+        listos,
+        total: data.length
+      })
     } catch (error) {
-      console.error('Error loading data:', error)
+      console.error('Error fetching pedidos:', error)
+      toast({
+        title: 'Error',
+        description: 'No se pudieron cargar los pedidos',
+        variant: 'destructive'
+      })
     } finally {
       setLoading(false)
     }
   }
 
-  const loadStats = async () => {
-    if (!bartenderId) return
+  const handleLogout = async () => {
+    await logout()
+    toast({
+      title: '👋 Sesión cerrada',
+      description: 'Has cerrado sesión correctamente',
+      variant: 'default'
+    })
+    router.push('/')
+  }
+
+  const actualizarEstado = async (pedidoId: string, nuevoEstado: string) => {
     try {
-      const today = new Date().toISOString().split('T')[0]
+      await orderService.updateOrder(pedidoId, { estado: nuevoEstado })
       
-      const { data: ventasData } = await supabase
-        .from('ventas')
-        .select('total')
-        .eq('bartender_id', bartenderId)
-        .gte('fecha_hora', `${today}T00:00:00`)
+      const pedido = pedidos.find(p => p.id === pedidoId)
+      if (pedido) {
+        await supabase
+          .from('notificaciones_mesero')
+          .insert([{
+            mesero_id: pedido.mesero_id,
+            pedido_id: pedidoId,
+            tipo: 'pedido_actualizado',
+            mensaje: `Pedido de mesa ${pedido.mesa} ahora está: ${nuevoEstado}`
+          }])
+      }
 
-      const { data: mermasData } = await supabase
-        .from('mermas')
-        .select('valor_perdido')
-        .eq('bartender_id', bartenderId)
-        .gte('fecha', `${today}T00:00:00`)
-
-      const ventas = ventasData?.reduce((sum, v) => sum + (v.total || 0), 0) || 0
-      const mermas = mermasData?.reduce((sum, m) => sum + (m.valor_perdido || 0), 0) || 0
-      const bebidas = ventasData?.length || 0
-      const eficiencia = bebidas > 0 ? (ventas / bebidas) : 0
-
-      setShiftStats({ ventas, mermas, bebidas, eficiencia })
+      toast({
+        title: '✅ Estado actualizado',
+        description: `Pedido ahora está: ${nuevoEstado}`,
+        variant: 'success'
+      })
+      
+      fetchPedidos()
     } catch (error) {
-      console.error('Error loading stats:', error)
+      toast({
+        title: 'Error',
+        description: 'No se pudo actualizar el estado',
+        variant: 'destructive'
+      })
     }
   }
 
-  const handlePrepareDrink = async (recipe: any) => {
-    if (!bartenderId) {
-      alert('No tienes un perfil de bartender asignado')
-      return
-    }
+  const handleMerma = async () => {
     try {
+      // Registrar merma
       const { error } = await supabase
-        .from('ventas')
+        .from('mermas')
         .insert([{
-          receta_id: recipe.id,
-          bartender_id: bartenderId,
-          total: recipe.precio_venta,
-          metodo_pago: 'efectivo',
-          estado: 'completada'
+          producto_id: mermaData.producto,
+          bartender_id: user?.id,
+          cantidad: mermaData.cantidad,
+          motivo: mermaData.motivo,
+          fecha: new Date().toISOString()
         }])
 
       if (error) throw error
-      await loadStats()
-      alert(`✅ ${recipe.nombre} preparada correctamente`)
-    } catch (error) {
-      console.error('Error preparing drink:', error)
-      alert('Error al preparar la bebida')
-    }
-  }
 
-  const handleReportWaste = async () => {
-    if (!bartenderId) return
-    try {
-      const { data: userData } = await supabase
-        .from('usuarios')
-        .select('sucursal_id')
-        .eq('id', user?.id)
-        .maybeSingle()
-
-      await wasteService.create({
-        producto_id: wasteData.producto_id,
-        bartender_id: bartenderId,
-        sucursal_id: userData?.sucursal_id || null,
-        cantidad: wasteData.cantidad,
-        motivo: wasteData.motivo,
-        descripcion: wasteData.descripcion,
-        tipo: wasteData.tipo
+      toast({
+        title: '✅ Merma registrada',
+        description: 'La merma ha sido registrada correctamente',
+        variant: 'success'
       })
 
-      setShowWasteDialog(false)
-      setWasteData({ producto_id: '', cantidad: 0, motivo: 'caida', descripcion: '', tipo: 'no_esperada' })
-      await loadStats()
-      alert('✅ Merma reportada correctamente')
+      setIsMermaOpen(false)
+      setMermaData({ producto: '', cantidad: 0, motivo: '' })
     } catch (error) {
-      console.error('Error reporting waste:', error)
-      alert('Error al reportar la merma')
+      console.error('Error registrando merma:', error)
+      toast({
+        title: 'Error',
+        description: 'No se pudo registrar la merma',
+        variant: 'destructive'
+      })
     }
   }
 
-  const filteredRecipes = recipes.filter(recipe =>
-    recipe.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    recipe.nombre_corto?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
-
-  const getFirstName = () => {
-    if (!userData) return 'Bartender'
-    return userData.nombre || 'Bartender'
+  const getStatusColor = (estado: string) => {
+    switch (estado) {
+      case 'pendiente': return 'bg-yellow-100 text-yellow-700'
+      case 'preparando': return 'bg-blue-100 text-blue-700'
+      case 'listo': return 'bg-green-100 text-green-700'
+      case 'servido': return 'bg-gray-100 text-gray-700'
+      case 'cancelado': return 'bg-red-100 text-red-700'
+      default: return 'bg-gray-100 text-gray-700'
+    }
   }
 
-  const getInitials = () => {
-    if (!userData) return 'B'
-    return `${userData.nombre?.charAt(0) || ''}${userData.apellido?.charAt(0) || ''}`.toUpperCase()
+  const getStatusIcon = (estado: string) => {
+    switch (estado) {
+      case 'pendiente': return <Clock className="h-4 w-4" />
+      case 'preparando': return <Coffee className="h-4 w-4" />
+      case 'listo': return <CheckCircle className="h-4 w-4" />
+      default: return null
+    }
   }
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-12 w-12 text-green-600 animate-spin" />
+          <p className="text-gray-500">Cargando pedidos...</p>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
         <div className="px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center">
-              <Button variant="ghost" size="icon" className="lg:hidden">
-                <Menu className="h-5 w-5" />
-              </Button>
-              <div className="flex items-center ml-2 lg:ml-0">
-                <span className="text-xl font-bold text-gray-900">BARRANCO</span>
-                <span className="ml-2 text-xs font-semibold text-green-600 bg-green-100 px-2 py-1 rounded-full">Bartender</span>
-              </div>
+              <span className="text-xl font-bold text-gray-900">BARRANCO</span>
+              <span className="ml-2 text-xs font-semibold text-green-600 bg-green-100 px-2 py-1 rounded-full">Bartender</span>
             </div>
             <div className="flex items-center gap-3">
-              <div className="relative hidden md:block">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Buscar recetas..."
-                  className="pl-9 pr-4 py-2 text-sm bg-gray-100 rounded-lg border-0 focus:ring-2 focus:ring-green-500 w-48 lg:w-64"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={logout} className="text-gray-600 hover:text-gray-900">
-                  <LogOut className="h-4 w-4 mr-1" />
-                  Salir
-                </Button>
-              </div>
+              <NotificationBell bartenderId={user?.id || ''} />
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="text-red-600 border-red-200 hover:bg-red-50"
+                onClick={() => setIsMermaOpen(true)}
+              >
+                <TrendingUp className="h-4 w-4 mr-1" />
+                Merma
+              </Button>
+              <Avatar className="cursor-pointer">
+                <AvatarFallback className="bg-green-600 text-white">
+                  {user?.nombre?.charAt(0) || 'B'}
+                </AvatarFallback>
+              </Avatar>
+              <Button variant="ghost" size="sm" onClick={handleLogout} className="text-gray-600 hover:text-gray-900">
+                <LogOut className="h-4 w-4 mr-1" />
+                Salir
+              </Button>
             </div>
           </div>
         </div>
       </header>
 
       <main className="px-4 sm:px-6 lg:px-8 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          <div className="lg:col-span-3">
-            <div className="flex items-center gap-3 mb-6">
-              <AvatarWithViewer
-                src={null}
-                fallback={getInitials()}
-                size="lg"
-              />
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">
-                  {timeIcon} {greeting}, {getFirstName()}
-                </h1>
-                <p className="text-gray-500">Prepara bebidas y gestiona tu turno</p>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex gap-2">
-                <Dialog open={showWasteDialog} onOpenChange={setShowWasteDialog}>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" className="border-yellow-500 text-yellow-600 hover:bg-yellow-50">
-                      <AlertTriangle className="h-4 w-4 mr-2" />
-                      Reportar Merma
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Reportar Merma</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-4">
-                      <div>
-                        <Label>Producto</Label>
-                        <Select
-                          value={wasteData.producto_id}
-                          onValueChange={(value) => setWasteData({ ...wasteData, producto_id: value })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Seleccionar producto" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {products.map(p => (
-                              <SelectItem key={p.id} value={p.id}>{p.nombre} {p.marca ? `- ${p.marca}` : ''}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label>Cantidad</Label>
-                        <Input
-                          type="number"
-                          value={wasteData.cantidad}
-                          onChange={(e) => setWasteData({ ...wasteData, cantidad: parseFloat(e.target.value) })}
-                          placeholder="Ej: 30"
-                        />
-                      </div>
-                      <div>
-                        <Label>Motivo</Label>
-                        <Select
-                          value={wasteData.motivo}
-                          onValueChange={(value) => setWasteData({ ...wasteData, motivo: value })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="caida">💥 Caída</SelectItem>
-                            <SelectItem value="rotura">🔨 Rotura de botella</SelectItem>
-                            <SelectItem value="agrio">🧪 Producto agrio</SelectItem>
-                            <SelectItem value="cortesia">🎁 Cortesía</SelectItem>
-                            <SelectItem value="error_preparacion">❌ Error de preparación</SelectItem>
-                            <SelectItem value="caducidad">📅 Caducidad</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label>Descripción (opcional)</Label>
-                        <Textarea
-                          value={wasteData.descripcion}
-                          onChange={(e) => setWasteData({ ...wasteData, descripcion: e.target.value })}
-                          placeholder="Detalles adicionales..."
-                        />
-                      </div>
-                      <Button onClick={handleReportWaste} className="w-full bg-yellow-600 hover:bg-yellow-700">
-                        Reportar Merma
-                      </Button>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-              {filteredRecipes.map((recipe) => (
-                <Card key={recipe.id} className="hover:shadow-lg transition-shadow cursor-pointer">
-                  <CardContent className="p-4">
-                    <div className="flex items-start gap-3">
-                      <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
-                        {recipe.imagen_url ? (
-                          <img src={recipe.imagen_url} alt={recipe.nombre} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <Utensils className="h-8 w-8 text-gray-300" />
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h3 className="font-semibold text-gray-900 truncate">{recipe.nombre}</h3>
-                        <p className="text-sm text-gray-500">{recipe.nombre_corto || recipe.categoria}</p>
-                        <p className="text-lg font-bold text-gray-900 mt-1">${recipe.precio_venta}</p>
-                      </div>
-                    </div>
-                    
-                    <div className="mt-3 flex gap-2">
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            className="flex-1 text-blue-600 border-blue-200 hover:bg-blue-50"
-                            onClick={() => setSelectedRecipe(recipe)}
-                          >
-                            <Eye className="h-4 w-4 mr-1" />
-                            Ver
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                          {selectedRecipe && (
-                            <>
-                              <DialogHeader>
-                                <DialogTitle>{selectedRecipe.nombre}</DialogTitle>
-                              </DialogHeader>
-                              <div className="space-y-4">
-                                <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                    <p className="text-sm font-medium text-gray-500">Categoría</p>
-                                    <p>{selectedRecipe.categoria}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-sm font-medium text-gray-500">Precio</p>
-                                    <p className="font-bold">${selectedRecipe.precio_venta}</p>
-                                  </div>
-                                </div>
-                                <div>
-                                  <p className="text-sm font-medium text-gray-500">Método de preparación</p>
-                                  <p className="text-sm text-gray-700">{selectedRecipe.metodo_preparacion || 'No especificado'}</p>
-                                </div>
-                                {selectedRecipe.garnish && (
-                                  <div>
-                                    <p className="text-sm font-medium text-gray-500">Garnish</p>
-                                    <p className="text-sm text-gray-700">{selectedRecipe.garnish}</p>
-                                  </div>
-                                )}
-                                <div>
-                                  <p className="text-sm font-medium text-gray-500">Ingredientes</p>
-                                  <ul className="list-disc list-inside text-sm text-gray-700">
-                                    {selectedRecipe.ingredientes?.map((ing: any) => (
-                                      <li key={ing.id}>{ing.producto_nombre}: {ing.cantidad} {ing.unidad}</li>
-                                    ))}
-                                  </ul>
-                                </div>
-                                <Button 
-                                  className="w-full bg-green-600 hover:bg-green-700"
-                                  onClick={() => {
-                                    handlePrepareDrink(selectedRecipe)
-                                    setSelectedRecipe(null)
-                                  }}
-                                >
-                                  <Coffee className="h-4 w-4 mr-2" />
-                                  Preparar Bebida
-                                </Button>
-                              </div>
-                            </>
-                          )}
-                        </DialogContent>
-                      </Dialog>
-                      
-                      <Button 
-                        size="sm" 
-                        className="flex-1 bg-green-600 hover:bg-green-700"
-                        onClick={() => handlePrepareDrink(recipe)}
-                      >
-                        <Coffee className="h-4 w-4 mr-1" />
-                        Preparar
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
           <div>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Clock className="h-5 w-5 text-green-600" />
-                  RESUMEN DEL TURNO
-                </CardTitle>
-                <CardDescription>Tu rendimiento hoy</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <Coffee className="h-4 w-4 text-gray-400" />
-                    <span className="text-sm text-gray-600">Bebidas</span>
-                  </div>
-                  <span className="text-lg font-bold">{shiftStats.bebidas}</span>
-                </div>
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <DollarSign className="h-4 w-4 text-gray-400" />
-                    <span className="text-sm text-gray-600">Ventas</span>
-                  </div>
-                  <span className="text-lg font-bold text-green-600">${shiftStats.ventas.toFixed(2)}</span>
-                </div>
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4 text-gray-400" />
-                    <span className="text-sm text-gray-600">Merma</span>
-                  </div>
-                  <span className="text-lg font-bold text-red-500">${shiftStats.mermas.toFixed(2)}</span>
-                </div>
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="h-4 w-4 text-gray-400" />
-                    <span className="text-sm text-gray-600">Eficiencia</span>
-                  </div>
-                  <span className="text-lg font-bold text-blue-600">{shiftStats.eficiencia.toFixed(2)}%</span>
-                </div>
-                <div>
-                  <Progress value={Math.min(shiftStats.eficiencia, 100)} className="h-2" />
-                </div>
-              </CardContent>
-            </Card>
+            <h1 className="text-2xl font-bold text-gray-900">
+              ¡Hola, {user?.nombre || user?.email?.split('@')[0] || 'Bartender'}!
+            </h1>
+            <p className="text-gray-500">Gestiona los pedidos de la barra</p>
           </div>
+          <Button 
+            variant="outline" 
+            onClick={fetchPedidos}
+            className="text-gray-600"
+          >
+            <Loader2 className="h-4 w-4 mr-2" />
+            Actualizar
+          </Button>
         </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500">Total Pedidos</p>
+                  <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
+                </div>
+                <div className="p-3 bg-blue-100 rounded-full">
+                  <Coffee className="h-5 w-5 text-blue-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500">Pendientes</p>
+                  <p className="text-2xl font-bold text-yellow-600">{stats.pendientes}</p>
+                </div>
+                <div className="p-3 bg-yellow-100 rounded-full">
+                  <Clock className="h-5 w-5 text-yellow-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500">Preparando</p>
+                  <p className="text-2xl font-bold text-blue-600">{stats.preparando}</p>
+                </div>
+                <div className="p-3 bg-blue-100 rounded-full">
+                  <TrendingUp className="h-5 w-5 text-blue-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500">Listos</p>
+                  <p className="text-2xl font-bold text-green-600">{stats.listos}</p>
+                </div>
+                <div className="p-3 bg-green-100 rounded-full">
+                  <CheckCircle className="h-5 w-5 text-green-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              <span>📋 Pedidos en la barra</span>
+              <Badge variant="secondary">
+                {pedidos.length} total
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {pedidos.length === 0 ? (
+              <div className="text-center py-12">
+                <Coffee className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500">No hay pedidos en la barra</p>
+                <p className="text-sm text-gray-400">Los pedidos aparecerán aquí cuando los meseros los envíen</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {pedidos.map((pedido) => (
+                  <div key={pedido.id} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-lg">
+                            Mesa {pedido.mesa || 'N/A'}
+                          </span>
+                          <Badge className={getStatusColor(pedido.estado)}>
+                            {getStatusIcon(pedido.estado)}
+                            <span className="ml-1">{pedido.estado.toUpperCase()}</span>
+                          </Badge>
+                          <span className="text-sm text-gray-400">
+                            {new Date(pedido.created_at).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        
+                        <div className="mt-2 space-y-1">
+                          {pedido.items?.map((item: any, idx: number) => (
+                            <div key={idx} className="flex justify-between text-sm text-gray-600">
+                              <span>{item.nombre}</span>
+                              <span className="font-medium">x{item.cantidad}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col items-end gap-2">
+                        <span className="font-bold text-lg text-orange-600">
+                          ${pedido.total?.toFixed(2) || '0.00'}
+                        </span>
+                        <div className="flex gap-2 flex-wrap">
+                          {pedido.estado === 'pendiente' && (
+                            <Button 
+                              size="sm" 
+                              className="bg-blue-600 hover:bg-blue-700 text-white"
+                              onClick={() => actualizarEstado(pedido.id, 'preparando')}
+                            >
+                              <Coffee className="h-3 w-3 mr-1" />
+                              Preparar
+                            </Button>
+                          )}
+                          {pedido.estado === 'preparando' && (
+                            <Button 
+                              size="sm" 
+                              className="bg-green-600 hover:bg-green-700 text-white"
+                              onClick={() => actualizarEstado(pedido.id, 'listo')}
+                            >
+                              <CheckCircle className="h-3 w-3 mr-1" />
+                              Marcar Listo
+                            </Button>
+                          )}
+                          {pedido.estado === 'listo' && (
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              className="text-gray-600"
+                              onClick={() => actualizarEstado(pedido.id, 'servido')}
+                            >
+                              Servido
+                            </Button>
+                          )}
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            className="text-red-600 border-red-200 hover:bg-red-50"
+                            onClick={() => actualizarEstado(pedido.id, 'cancelado')}
+                          >
+                            <XCircle className="h-3 w-3 mr-1" />
+                            Cancelar
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </main>
+
+      <Dialog open={isMermaOpen} onOpenChange={setIsMermaOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-red-500" />
+              Registrar Merma
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="producto">Producto</Label>
+              <Input
+                id="producto"
+                placeholder="Nombre del producto"
+                value={mermaData.producto}
+                onChange={(e) => setMermaData({ ...mermaData, producto: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="cantidad">Cantidad perdida</Label>
+              <Input
+                id="cantidad"
+                type="number"
+                placeholder="Cantidad"
+                value={mermaData.cantidad || ''}
+                onChange={(e) => setMermaData({ ...mermaData, cantidad: parseFloat(e.target.value) || 0 })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="motivo">Motivo</Label>
+              <Input
+                id="motivo"
+                placeholder="Ej: Derrame, producto caducado, etc."
+                value={mermaData.motivo}
+                onChange={(e) => setMermaData({ ...mermaData, motivo: e.target.value })}
+              />
+            </div>
+            <Button className="w-full bg-red-600 hover:bg-red-700" onClick={handleMerma}>
+              Registrar Merma
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

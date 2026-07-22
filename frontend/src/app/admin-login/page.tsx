@@ -8,114 +8,49 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { createClient } from '@/lib/supabase/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { useAuth } from '@/hooks/useAuth'
+import { createClient } from '@/lib/supabase/client'
 
 export default function AdminLoginPage() {
   const router = useRouter()
-  const supabase = createClient()
+  const { login, loading: authLoading } = useAuth()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [email, setEmail] = useState('luisfelipe@barranco.com')
-  const [password, setPassword] = useState('123456789')
+  const [email, setEmail] = useState('admin@barranco.com')
+  const [password, setPassword] = useState('Admin123!')
 
   useEffect(() => {
     const checkSession = async () => {
+      const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
       if (session) {
-        const { data: perfil } = await supabase
+        const { data: userData } = await supabase
           .from('usuarios')
           .select('rol')
           .eq('id', session.user.id)
-          .maybeSingle()
-        if (perfil?.rol === 'admin') {
+          .single()
+        if (userData?.rol === 'admin') {
           router.push('/admin')
         }
       }
     }
     checkSession()
-  }, [supabase.auth, router])
+  }, [router])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
     setError('')
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({ 
-        email: email.trim(), 
-        password: password 
-      })
-      
-      if (error) {
-        // Si el usuario no existe en Auth, intentar crearlo con los datos
-        if (error.message.includes('Invalid login credentials')) {
-          // Intentar crear el usuario
-          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-            email: email.trim(),
-            password: password,
-            options: {
-              data: {
-                nombre: 'Luis Felipe',
-                apellido: 'Arellano',
-                rol: 'admin'
-              }
-            }
-          })
-          
-          if (signUpError) throw new Error(signUpError.message)
-          
-          if (signUpData.user) {
-            // Crear el usuario en la tabla usuarios
-            const { error: userError } = await supabase
-              .from('usuarios')
-              .upsert({
-                id: signUpData.user.id,
-                email: email.trim(),
-                password_hash: 'auth_managed',
-                nombre: 'Luis Felipe',
-                apellido: 'Arellano',
-                pin: '123456',
-                rol: 'admin',
-                activo: true,
-                email_verificado: true,
-                telefono: '+523521674162'
-              }, { onConflict: 'id' })
-            
-            if (userError) throw new Error(userError.message)
-            
-            // Iniciar sesión nuevamente
-            const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
-              email: email.trim(),
-              password: password
-            })
-            
-            if (loginError) throw new Error(loginError.message)
-            if (!loginData.user) throw new Error('No se pudo obtener el usuario')
-            
-            router.push('/admin')
-            return
-          }
-        }
-        throw new Error(error.message)
-      }
-      
-      if (!data.user) throw new Error('No se pudo obtener el usuario')
 
-      const { data: perfil, error: perfilError } = await supabase
-        .from('usuarios')
-        .select('rol')
-        .eq('id', data.user.id)
-        .maybeSingle()
-      
-      if (perfilError) throw new Error('Error al verificar el rol')
-      
-      if (perfil?.rol !== 'admin') {
-        await supabase.auth.signOut()
-        throw new Error('Acceso no autorizado: no eres administrador')
+    try {
+      const result = await login(email.trim(), password, 'admin')
+      if (result.success) {
+        router.push('/admin')
+      } else {
+        setError(result.error || 'Error al iniciar sesión')
       }
-      
-      router.push('/admin')
     } catch (err: any) {
       setError(err.message || 'Error al iniciar sesión')
     } finally {
@@ -184,7 +119,7 @@ export default function AdminLoginPage() {
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
-              <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white" disabled={loading}>
+              <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white" disabled={loading || authLoading}>
                 {loading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
               </Button>
             </form>

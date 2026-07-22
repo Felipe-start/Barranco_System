@@ -48,7 +48,7 @@ const alerts = [
 ]
 
 export default function AdminDashboardPage() {
-  const { userData } = useAuth()
+  const { user } = useAuth()
   const { greeting, timeIcon } = useGreeting()
   const [stats, setStats] = useState({ bartenders: 0, meseros: 0, productos: 0, ventas: 0, admins: 0 })
   const [loading, setLoading] = useState(true)
@@ -87,8 +87,8 @@ export default function AdminDashboardPage() {
   }
 
   const getFirstName = () => {
-    if (!userData) return 'Administrador'
-    return userData.nombre || 'Administrador'
+    if (!user) return 'Administrador'
+    return user.nombre || 'Administrador'
   }
 
   return (
@@ -105,6 +105,7 @@ export default function AdminDashboardPage() {
         </div>
       </div>
 
+      {/* Resto del dashboard... */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 mb-6">
         <Link href="/admin/inventory">
           <Card className="hover:shadow-md transition-shadow cursor-pointer border-blue-100 bg-blue-50/50">

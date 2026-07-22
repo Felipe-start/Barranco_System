@@ -1,1 +1,9 @@
-{}
+{
+  "/bartender/page": "app/bartender/page.js",
+  "/mesero/orders/page": "app/mesero/orders/page.js",
+  "/admin/mesas/page": "app/admin/mesas/page.js",
+  "/admin/sales/page": "app/admin/sales/page.js",
+  "/admin/page": "app/admin/page.js",
+  "/admin/recipes/page": "app/admin/recipes/page.js",
+  "/admin/inventory/page": "app/admin/inventory/page.js"
+}

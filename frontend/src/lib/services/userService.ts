@@ -1,5 +1,4 @@
-import { safeSupabase, withRetry } from '@/lib/supabase/safeClient'
-import { formatSupabaseError } from '@/lib/utils/errorHandler'
+import { createClient } from '@/lib/supabase/client'
 
 export interface User {
   id: string
@@ -55,198 +54,127 @@ export interface Mesero {
 }
 
 export const userService = {
-  // ============================================================
-  // USUARIOS - CRUD CON MANEJO DE ERRORES
-  // ============================================================
-
   async getAll(rol?: string): Promise<User[]> {
-    const result = await safeSupabase.safeSelect<User>(
-      'usuarios',
-      (q) => {
-        let query = q.select('*').order('nombre')
-        if (rol) query = query.eq('rol', rol)
-        return query
-      }
-    )
-    
-    if (!result.success) throw result.error
-    return result.data || []
+    const supabase = createClient()
+    let query = supabase.from('usuarios').select('*').order('nombre')
+    if (rol) query = query.eq('rol', rol)
+    const { data, error } = await query
+    if (error) throw error
+    return data || []
   },
 
   async getById(id: string): Promise<User | null> {
-    const result = await safeSupabase.safeSelect<User>(
-      'usuarios',
-      (q) => q.select('*').eq('id', id)
-    )
-    
-    if (!result.success) throw result.error
-    return result.data?.[0] || null
+    const supabase = createClient()
+    const { data, error } = await supabase
+      .from('usuarios')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle()
+    if (error) throw error
+    return data || null
   },
 
   async getCurrentUser(): Promise<User | null> {
-    const { data: { user } } = await withRetry(() => 
-      safeSupabase.client.auth.getUser()
-    )
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
     if (!user) return null
-    
-    const result = await safeSupabase.safeSelect<User>(
-      'usuarios',
-      (q) => q.select('*').eq('id', user.id)
-    )
-    
-    if (!result.success) throw result.error
-    return result.data?.[0] || null
-  },
-
-  async getByEmail(email: string): Promise<User | null> {
-    const result = await safeSupabase.safeSelect<User>(
-      'usuarios',
-      (q) => q.select('*').eq('email', email)
-    )
-    
-    if (!result.success) throw result.error
-    return result.data?.[0] || null
+    const { data, error } = await supabase
+      .from('usuarios')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle()
+    if (error) throw error
+    return data || null
   },
 
   async updateUser(id: string, userData: Partial<User>): Promise<User> {
-    const result = await safeSupabase.safeUpdate<User>(
-      'usuarios',
-      {
+    const supabase = createClient()
+    const { data, error } = await supabase
+      .from('usuarios')
+      .update({
         ...userData,
         updated_at: new Date().toISOString()
-      },
-      { id }
-    )
-    
-    if (!result.success) throw result.error
-    return result.data as User
-  },
-
-  async updateAvatar(id: string, avatarUrl: string): Promise<User> {
-    const result = await safeSupabase.safeUpdate<User>(
-      'usuarios',
-      {
-        avatar_url: avatarUrl,
-        updated_at: new Date().toISOString()
-      },
-      { id }
-    )
-    
-    if (!result.success) throw result.error
-    return result.data as User
+      })
+      .eq('id', id)
+      .select()
+      .maybeSingle()
+    if (error) throw error
+    return data as User
   },
 
   async updatePassword(id: string, newPassword: string): Promise<void> {
-    try {
-      const { error } = await safeSupabase.client.auth.admin.updateUserById(
-        id,
-        { password: newPassword }
-      )
-      if (error) throw error
-    } catch (error) {
-      throw formatSupabaseError(error)
-    }
+    const supabase = createClient()
+    const { error } = await supabase.auth.admin.updateUserById(
+      id,
+      { password: newPassword }
+    )
+    if (error) throw error
   },
 
   async deleteUser(id: string): Promise<void> {
-    // Eliminar dependencias
-    await safeSupabase.safeDelete('bartenders', { usuario_id: id })
-    await safeSupabase.safeDelete('meseros', { usuario_id: id })
-    
-    const result = await safeSupabase.safeDelete('usuarios', { id })
-    if (!result.success) throw result.error
-  },
-
-  // ============================================================
-  // AUTORIZACIÓN Y NIP - CON REINTENTOS
-  // ============================================================
-
-  async getNIP(usuarioId: string): Promise<{ codigo: string | null, expiracion: string | null }> {
-    const result = await withRetry(() => 
-      safeSupabase.safeSelect<{ codigo_acceso: string, codigo_expiracion: string }>(
-        'usuarios',
-        (q) => q.select('codigo_acceso, codigo_expiracion').eq('id', usuarioId)
-      )
-    )
-    
-    if (!result.success) throw result.error
-    return {
-      codigo: result.data?.[0]?.codigo_acceso || null,
-      expiracion: result.data?.[0]?.codigo_expiracion || null
-    }
+    const supabase = createClient()
+    await supabase.from('bartenders').delete().eq('usuario_id', id)
+    await supabase.from('meseros').delete().eq('usuario_id', id)
+    const { error } = await supabase.from('usuarios').delete().eq('id', id)
+    if (error) throw error
   },
 
   async generarNIP(usuarioId: string, adminId: string): Promise<string> {
-    // Verificar que el admin existe
-    const adminCheck = await safeSupabase.safeSelect<User>(
-      'usuarios',
-      (q) => q.select('id, email').eq('id', adminId).eq('rol', 'admin')
-    )
+    const supabase = createClient()
+    const { data: adminCheck, error: adminError } = await supabase
+      .from('usuarios')
+      .select('id, email, rol')
+      .eq('id', adminId)
+      .maybeSingle()
     
-    if (!adminCheck.success || !adminCheck.data?.length) {
+    if (adminError || !adminCheck) {
       throw new Error('Administrador no encontrado o no tiene permisos')
+    }
+    
+    if (adminCheck.rol !== 'admin') {
+      throw new Error('No tienes permisos de administrador')
     }
     
     const codigo = Math.floor(100000 + Math.random() * 900000).toString()
     const expiracion = new Date()
     expiracion.setHours(expiracion.getHours() + 24)
     
-    const result = await safeSupabase.safeUpdate<User>(
-      'usuarios',
-      {
+    const { data, error } = await supabase
+      .from('usuarios')
+      .update({
         codigo_acceso: codigo,
         codigo_expiracion: expiracion.toISOString(),
         autorizado_por: adminId,
         activo: true,
         updated_at: new Date().toISOString()
-      },
-      { id: usuarioId }
-    )
+      })
+      .eq('id', usuarioId)
+      .select()
+      .maybeSingle()
     
-    if (!result.success) throw result.error
-    
+    if (error) throw error
     return codigo
   },
 
-  // ============================================================
-  // VERIFICAR NIP - CON REINTENTOS
-  // ============================================================
-
   async verificarSoloCodigo(codigo: string): Promise<any> {
-    const result = await withRetry(() =>
-      safeSupabase.safeSelect<{
-        id: string,
-        email: string,
-        nombre: string,
-        apellido: string,
-        rol: string,
-        codigo_acceso: string,
-        codigo_expiracion: string,
-        activo: boolean
-      }>(
-        'usuarios',
-        (q) => q.select('id, email, nombre, apellido, rol, codigo_acceso, codigo_expiracion, activo')
-          .eq('codigo_acceso', codigo)
-      )
-    )
+    const supabase = createClient()
+    const { data, error } = await supabase
+      .from('usuarios')
+      .select('id, email, nombre, apellido, rol, codigo_acceso, codigo_expiracion, activo')
+      .eq('codigo_acceso', codigo)
+      .maybeSingle()
     
-    if (!result.success) {
-      return { valido: false, mensaje: 'Error al verificar el NIP. Intenta de nuevo.' }
-    }
-    
-    const data = result.data?.[0]
-    
-    if (!data) {
+    if (error || !data) {
       return { valido: false, mensaje: 'NIP inválido' }
     }
     
     const expiracion = new Date(data.codigo_expiracion)
     if (expiracion < new Date()) {
-      return { valido: false, mensaje: 'El NIP ha expirado. Contacta al administrador para generar uno nuevo.' }
+      return { valido: false, mensaje: 'El NIP ha expirado' }
     }
     
     if (!data.activo) {
-      return { valido: false, mensaje: 'Usuario desactivado. Contacta al administrador.' }
+      return { valido: false, mensaje: 'Usuario desactivado' }
     }
     
     return {
@@ -260,457 +188,187 @@ export const userService = {
   },
 
   async desactivarUsuario(id: string): Promise<void> {
-    const result = await safeSupabase.safeUpdate<User>(
-      'usuarios',
-      {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('usuarios')
+      .update({
         activo: false,
         codigo_acceso: null,
         codigo_expiracion: null,
         updated_at: new Date().toISOString()
-      },
-      { id }
-    )
-    
-    if (!result.success) throw result.error
+      })
+      .eq('id', id)
+    if (error) throw error
   },
 
   async activarUsuario(id: string): Promise<void> {
-    const result = await safeSupabase.safeUpdate<User>(
-      'usuarios',
-      {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('usuarios')
+      .update({
         activo: true,
         updated_at: new Date().toISOString()
-      },
-      { id }
-    )
-    
-    if (!result.success) throw result.error
+      })
+      .eq('id', id)
+    if (error) throw error
   },
-
-  // ============================================================
-  // FUNCIONES DE TURNO
-  // ============================================================
-
-  async iniciarTurno(usuarioId: string): Promise<void> {
-    const user = await this.getById(usuarioId)
-    if (!user) throw new Error('Usuario no encontrado')
-    
-    if (user.rol === 'bartender') {
-      const result = await safeSupabase.safeUpdate<Bartender>(
-        'bartenders',
-        { turno_activo: true },
-        { usuario_id: usuarioId }
-      )
-      if (!result.success) throw result.error
-    } else if (user.rol === 'mesero') {
-      const result = await safeSupabase.safeUpdate<Mesero>(
-        'meseros',
-        { turno_activo: true },
-        { usuario_id: usuarioId }
-      )
-      if (!result.success) throw result.error
-    }
-  },
-
-  async terminarTurno(usuarioId: string): Promise<void> {
-    const user = await this.getById(usuarioId)
-    if (!user) throw new Error('Usuario no encontrado')
-    
-    if (user.rol === 'bartender') {
-      const result = await safeSupabase.safeUpdate<Bartender>(
-        'bartenders',
-        {
-          turno_activo: false,
-          updated_at: new Date().toISOString()
-        },
-        { usuario_id: usuarioId }
-      )
-      if (!result.success) throw result.error
-    } else if (user.rol === 'mesero') {
-      const result = await safeSupabase.safeUpdate<Mesero>(
-        'meseros',
-        {
-          turno_activo: false,
-          updated_at: new Date().toISOString()
-        },
-        { usuario_id: usuarioId }
-      )
-      if (!result.success) throw result.error
-    }
-    
-    await this.desactivarUsuario(usuarioId)
-  },
-
-  async getTurnoActivo(usuarioId: string): Promise<boolean> {
-    const user = await this.getById(usuarioId)
-    if (!user) return false
-    
-    if (user.rol === 'bartender') {
-      const result = await safeSupabase.safeSelect<{ turno_activo: boolean }>(
-        'bartenders',
-        (q) => q.select('turno_activo').eq('usuario_id', usuarioId)
-      )
-      if (!result.success) return false
-      return result.data?.[0]?.turno_activo || false
-    } else if (user.rol === 'mesero') {
-      const result = await safeSupabase.safeSelect<{ turno_activo: boolean }>(
-        'meseros',
-        (q) => q.select('turno_activo').eq('usuario_id', usuarioId)
-      )
-      if (!result.success) return false
-      return result.data?.[0]?.turno_activo || false
-    }
-    
-    return false
-  },
-
-  // ============================================================
-  // BARTENDERS - CRUD CON ERROR HANDLING
-  // ============================================================
 
   async getBartenders(): Promise<Bartender[]> {
-    const result = await safeSupabase.safeSelect<Bartender>(
-      'bartenders',
-      (q) => q.select(`
+    const supabase = createClient()
+    const { data, error } = await supabase
+      .from('bartenders')
+      .select(`
         *,
         usuarios (
-          id,
-          nombre,
-          apellido,
-          email,
-          phone_number,
-          avatar_url,
-          activo,
-          codigo_acceso,
-          codigo_expiracion,
-          autorizado_por,
-          ultimo_acceso
+          id, nombre, apellido, email, phone_number,
+          avatar_url, activo, codigo_acceso, codigo_expiracion
         )
-      `).order('nombre_completo')
-    )
-    
-    if (!result.success) throw result.error
-    return result.data || []
-  },
-
-  async getBartenderById(id: string): Promise<Bartender | null> {
-    const result = await safeSupabase.safeSelect<Bartender>(
-      'bartenders',
-      (q) => q.select(`
-        *,
-        usuarios (
-          id,
-          nombre,
-          apellido,
-          email,
-          phone_number,
-          avatar_url,
-          activo,
-          codigo_acceso,
-          codigo_expiracion,
-          autorizado_por,
-          ultimo_acceso
-        )
-      `).eq('id', id)
-    )
-    
-    if (!result.success) throw result.error
-    return result.data?.[0] || null
+      `)
+      .order('nombre_completo')
+    if (error) throw error
+    return data || []
   },
 
   async getBartenderByUsuarioId(usuarioId: string): Promise<Bartender | null> {
-    const result = await safeSupabase.safeSelect<Bartender>(
-      'bartenders',
-      (q) => q.select(`
-        *,
-        usuarios (
-          id,
-          nombre,
-          apellido,
-          email,
-          phone_number,
-          avatar_url,
-          activo,
-          codigo_acceso,
-          codigo_expiracion,
-          autorizado_por,
-          ultimo_acceso
-        )
-      `).eq('usuario_id', usuarioId)
-    )
-    
-    if (!result.success) throw result.error
-    return result.data?.[0] || null
-  },
-
-  async createBartender(data: {
-    usuario_id: string
-    codigo: string
-    nombre_completo: string
-    fecha_contratacion?: string
-  }): Promise<Bartender> {
-    const result = await safeSupabase.safeInsert<Bartender>(
-      'bartenders',
-      {
-        usuario_id: data.usuario_id,
-        codigo: data.codigo,
-        nombre_completo: data.nombre_completo,
-        fecha_contratacion: data.fecha_contratacion || new Date().toISOString().split('T')[0],
-        activo: false,
-        turno_activo: false,
-        calificacion_eficiencia: 0,
-        bebidas_preparadas: 0,
-        ventas_totales: 0,
-        mermas_reportadas: 0,
-        productividad: 0
-      }
-    )
-    
-    if (!result.success) throw result.error
-    return result.data as Bartender
-  },
-
-  async updateBartender(id: string, data: Partial<Bartender>): Promise<Bartender> {
-    const result = await safeSupabase.safeUpdate<Bartender>(
-      'bartenders',
-      {
-        ...data,
-        updated_at: new Date().toISOString()
-      },
-      { id }
-    )
-    
-    if (!result.success) throw result.error
-    return result.data as Bartender
+    const supabase = createClient()
+    const { data, error } = await supabase
+      .from('bartenders')
+      .select('*')
+      .eq('usuario_id', usuarioId)
+      .maybeSingle()
+    if (error) throw error
+    return data || null
   },
 
   async deleteBartender(id: string): Promise<void> {
-    const result = await safeSupabase.safeDelete('bartenders', { id })
-    if (!result.success) throw result.error
+    const supabase = createClient()
+    const { error } = await supabase.from('bartenders').delete().eq('id', id)
+    if (error) throw error
+  },
+
+  async getMeseros(): Promise<Mesero[]> {
+    const supabase = createClient()
+    const { data, error } = await supabase
+      .from('meseros')
+      .select(`
+        *,
+        usuarios (
+          id, nombre, apellido, email, phone_number,
+          avatar_url, activo, codigo_acceso, codigo_expiracion
+        )
+      `)
+      .order('nombre_completo')
+    if (error) throw error
+    return data || []
+  },
+
+  async getMeseroByUsuarioId(usuarioId: string): Promise<Mesero | null> {
+    const supabase = createClient()
+    const { data, error } = await supabase
+      .from('meseros')
+      .select('*')
+      .eq('usuario_id', usuarioId)
+      .maybeSingle()
+    if (error) throw error
+    return data || null
+  },
+
+  async deleteMesero(id: string): Promise<void> {
+    const supabase = createClient()
+    const { error } = await supabase.from('meseros').delete().eq('id', id)
+    if (error) throw error
   },
 
   async uploadBartenderFoto(file: File, bartenderId: string, usuarioId: string): Promise<string> {
+    const supabase = createClient()
     const extension = file.name.split('.').pop()
     const fileName = `${Date.now()}.${extension}`
     const path = `bartenders/${bartenderId}/${fileName}`
     
-    try {
-      const { error: uploadError } = await safeSupabase.client.storage
-        .from('barranco-images')
-        .upload(path, file, {
-          cacheControl: '3600',
-          upsert: true,
-          contentType: file.type
-        })
-      
-      if (uploadError) throw uploadError
-      
-      const { data: urlData } = await safeSupabase.client.storage
-        .from('barranco-images')
-        .getPublicUrl(path)
-      
-      const avatarUrl = urlData.publicUrl
-      
-      await safeSupabase.safeUpdate('bartenders', { foto_url: avatarUrl }, { id: bartenderId })
-      await safeSupabase.safeUpdate('usuarios', { avatar_url: avatarUrl }, { id: usuarioId })
-      
-      return avatarUrl
-    } catch (error) {
-      throw formatSupabaseError(error)
-    }
-  },
-
-  // ============================================================
-  // MESEROS - CRUD CON ERROR HANDLING
-  // ============================================================
-
-  async getMeseros(): Promise<Mesero[]> {
-    const result = await safeSupabase.safeSelect<Mesero>(
-      'meseros',
-      (q) => q.select(`
-        *,
-        usuarios (
-          id,
-          nombre,
-          apellido,
-          email,
-          phone_number,
-          avatar_url,
-          activo,
-          codigo_acceso,
-          codigo_expiracion,
-          autorizado_por,
-          ultimo_acceso
-        )
-      `).order('nombre_completo')
-    )
+    const { error: uploadError } = await supabase.storage
+      .from('barranco-images')
+      .upload(path, file, { cacheControl: '3600', upsert: true })
     
-    if (!result.success) throw result.error
-    return result.data || []
-  },
-
-  async getMeseroById(id: string): Promise<Mesero | null> {
-    const result = await safeSupabase.safeSelect<Mesero>(
-      'meseros',
-      (q) => q.select(`
-        *,
-        usuarios (
-          id,
-          nombre,
-          apellido,
-          email,
-          phone_number,
-          avatar_url,
-          activo,
-          codigo_acceso,
-          codigo_expiracion,
-          autorizado_por,
-          ultimo_acceso
-        )
-      `).eq('id', id)
-    )
+    if (uploadError) throw uploadError
     
-    if (!result.success) throw result.error
-    return result.data?.[0] || null
-  },
-
-  async getMeseroByUsuarioId(usuarioId: string): Promise<Mesero | null> {
-    const result = await safeSupabase.safeSelect<Mesero>(
-      'meseros',
-      (q) => q.select(`
-        *,
-        usuarios (
-          id,
-          nombre,
-          apellido,
-          email,
-          phone_number,
-          avatar_url,
-          activo,
-          codigo_acceso,
-          codigo_expiracion,
-          autorizado_por,
-          ultimo_acceso
-        )
-      `).eq('usuario_id', usuarioId)
-    )
+    const { data: urlData } = supabase.storage
+      .from('barranco-images')
+      .getPublicUrl(path)
     
-    if (!result.success) throw result.error
-    return result.data?.[0] || null
-  },
-
-  async createMesero(data: {
-    usuario_id: string
-    codigo: string
-    nombre_completo: string
-    fecha_contratacion?: string
-  }): Promise<Mesero> {
-    const result = await safeSupabase.safeInsert<Mesero>(
-      'meseros',
-      {
-        usuario_id: data.usuario_id,
-        codigo: data.codigo,
-        nombre_completo: data.nombre_completo,
-        fecha_contratacion: data.fecha_contratacion || new Date().toISOString().split('T')[0],
-        activo: false,
-        turno_activo: false,
-        calificacion: 0,
-        pedidos_atendidos: 0,
-        ventas_totales: 0
-      }
-    )
+    const avatarUrl = urlData.publicUrl
+    await supabase.from('bartenders').update({ foto_url: avatarUrl }).eq('id', bartenderId)
+    await supabase.from('usuarios').update({ avatar_url: avatarUrl }).eq('id', usuarioId)
     
-    if (!result.success) throw result.error
-    return result.data as Mesero
-  },
-
-  async updateMesero(id: string, data: Partial<Mesero>): Promise<Mesero> {
-    const result = await safeSupabase.safeUpdate<Mesero>(
-      'meseros',
-      {
-        ...data,
-        updated_at: new Date().toISOString()
-      },
-      { id }
-    )
-    
-    if (!result.success) throw result.error
-    return result.data as Mesero
-  },
-
-  async deleteMesero(id: string): Promise<void> {
-    const result = await safeSupabase.safeDelete('meseros', { id })
-    if (!result.success) throw result.error
+    return avatarUrl
   },
 
   async uploadMeseroFoto(file: File, meseroId: string, usuarioId: string): Promise<string> {
+    const supabase = createClient()
     const extension = file.name.split('.').pop()
     const fileName = `${Date.now()}.${extension}`
     const path = `meseros/${meseroId}/${fileName}`
     
-    try {
-      const { error: uploadError } = await safeSupabase.client.storage
-        .from('barranco-images')
-        .upload(path, file, {
-          cacheControl: '3600',
-          upsert: true,
-          contentType: file.type
-        })
-      
-      if (uploadError) throw uploadError
-      
-      const { data: urlData } = await safeSupabase.client.storage
-        .from('barranco-images')
-        .getPublicUrl(path)
-      
-      const avatarUrl = urlData.publicUrl
-      
-      await safeSupabase.safeUpdate('meseros', { foto_url: avatarUrl }, { id: meseroId })
-      await safeSupabase.safeUpdate('usuarios', { avatar_url: avatarUrl }, { id: usuarioId })
-      
-      return avatarUrl
-    } catch (error) {
-      throw formatSupabaseError(error)
-    }
+    const { error: uploadError } = await supabase.storage
+      .from('barranco-images')
+      .upload(path, file, { cacheControl: '3600', upsert: true })
+    
+    if (uploadError) throw uploadError
+    
+    const { data: urlData } = supabase.storage
+      .from('barranco-images')
+      .getPublicUrl(path)
+    
+    const avatarUrl = urlData.publicUrl
+    await supabase.from('meseros').update({ foto_url: avatarUrl }).eq('id', meseroId)
+    await supabase.from('usuarios').update({ avatar_url: avatarUrl }).eq('id', usuarioId)
+    
+    return avatarUrl
   },
 
-  // ============================================================
-  // CREAR USUARIO - CON ERROR HANDLING Y REINTENTOS
-  // ============================================================
+  async uploadAdminFoto(file: File, usuarioId: string): Promise<string> {
+    const supabase = createClient()
+    const extension = file.name.split('.').pop()
+    const fileName = `${Date.now()}.${extension}`
+    const path = `admins/${usuarioId}/${fileName}`
+    
+    const { error: uploadError } = await supabase.storage
+      .from('barranco-images')
+      .upload(path, file, { cacheControl: '3600', upsert: true })
+    
+    if (uploadError) throw uploadError
+    
+    const { data: urlData } = supabase.storage
+      .from('barranco-images')
+      .getPublicUrl(path)
+    
+    const avatarUrl = urlData.publicUrl
+    await supabase.from('usuarios').update({ avatar_url: avatarUrl }).eq('id', usuarioId)
+    
+    return avatarUrl
+  },
 
   async createFullUser(data: {
     email: string
     nombre: string
     apellido: string
     telefono?: string
-    fecha_nacimiento?: string
     rol: 'admin' | 'bartender' | 'mesero'
-    avatar_file?: File
   }): Promise<{ userId: string; email: string; rol: string; nip?: string }> {
+    const supabase = createClient()
     const pinSeisDigitos = Math.floor(100000 + Math.random() * 900000).toString()
     const password = data.rol === 'admin' ? 'Admin123!' : pinSeisDigitos
     
-    // 1. Crear en Auth con reintentos
-    let authResult
-    try {
-      authResult = await withRetry(() => 
-        safeSupabase.safeSignUp(data.email, password, {
-          nombre: data.nombre,
-          apellido: data.apellido,
-          rol: data.rol,
-        })
-      )
-    } catch (error) {
-      throw formatSupabaseError(error)
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: data.email,
+      password: password,
+      options: { data: { nombre: data.nombre, apellido: data.apellido, rol: data.rol } }
+    })
+    
+    if (authError || !authData.user) {
+      throw authError || new Error('No se pudo crear el usuario')
     }
     
-    if (!authResult.success || !authResult.data?.user) {
-      throw authResult.error || new Error('No se pudo crear el usuario')
-    }
-    
-    const userId = authResult.data.user.id
-
-    // 2. Crear en tabla usuarios
+    const userId = authData.user.id
     const userInsert: any = {
       id: userId,
       email: data.email,
@@ -722,8 +380,7 @@ export const userService = {
       telefono: data.telefono || null,
       activo: data.rol === 'admin' ? true : false,
       email_verificado: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      created_at: new Date().toISOString()
     }
 
     let nipGenerado = null
@@ -735,122 +392,34 @@ export const userService = {
       userInsert.codigo_expiracion = expiracion.toISOString()
     }
 
-    const userResult = await safeSupabase.safeInsert('usuarios', userInsert)
-    if (!userResult.success) throw userResult.error
-
+    await supabase.from('usuarios').insert([userInsert])
     const codigo = `USR-${Date.now().toString().slice(-6)}`
     const nombre_completo = `${data.nombre} ${data.apellido}`
 
-    // 3. Crear perfil según rol
     if (data.rol === 'bartender') {
-      await this.createBartender({
+      await supabase.from('bartenders').insert({
         usuario_id: userId,
         codigo: `BT-${codigo}`,
         nombre_completo: nombre_completo,
-        fecha_contratacion: new Date().toISOString().split('T')[0]
+        fecha_contratacion: new Date().toISOString().split('T')[0],
+        activo: false,
+        turno_activo: false
       })
     } else if (data.rol === 'mesero') {
-      await this.createMesero({
+      await supabase.from('meseros').insert({
         usuario_id: userId,
         codigo: `MS-${codigo}`,
         nombre_completo: nombre_completo,
-        fecha_contratacion: new Date().toISOString().split('T')[0]
+        fecha_contratacion: new Date().toISOString().split('T')[0],
+        activo: false,
+        turno_activo: false
       })
     }
 
-    // 4. Subir avatar si se proporcionó
-    if (data.avatar_file) {
-      try {
-        const extension = data.avatar_file.name.split('.').pop()
-        const fileName = `${Date.now()}.${extension}`
-        const folder = data.rol === 'admin' ? 'admins' : data.rol === 'bartender' ? 'bartenders' : 'meseros'
-        const path = `${folder}/${userId}/${fileName}`
-        
-        const { error: uploadError } = await safeSupabase.client.storage
-          .from('barranco-images')
-          .upload(path, data.avatar_file, {
-            cacheControl: '3600',
-            upsert: true,
-            contentType: data.avatar_file.type
-          })
-        
-        if (!uploadError) {
-          const { data: urlData } = await safeSupabase.client.storage
-            .from('barranco-images')
-            .getPublicUrl(path)
-          const avatarUrl = urlData.publicUrl
-          
-          await safeSupabase.safeUpdate('usuarios', { avatar_url: avatarUrl }, { id: userId })
-        }
-      } catch (error) {
-        console.error('Error uploading avatar:', error)
-        // No lanzar error, el usuario ya fue creado
-      }
-    }
-
-    // 5. Si es admin, activarlo inmediatamente
     if (data.rol === 'admin') {
-      await safeSupabase.safeUpdate('usuarios', { activo: true }, { id: userId })
+      await supabase.from('usuarios').update({ activo: true }).eq('id', userId)
     }
 
-    return { 
-      userId, 
-      email: data.email, 
-      rol: data.rol,
-      nip: nipGenerado || undefined
-    }
-  },
-
-  async getCounters() {
-    const bartendersResult = await safeSupabase.safeSelect(
-      'bartenders',
-      (q) => q.select('*', { count: 'exact', head: true }).eq('activo', true)
-    )
-    
-    const meserosResult = await safeSupabase.safeSelect(
-      'meseros',
-      (q) => q.select('*', { count: 'exact', head: true }).eq('activo', true)
-    )
-    
-    const adminsResult = await safeSupabase.safeSelect(
-      'usuarios',
-      (q) => q.select('*', { count: 'exact', head: true }).eq('rol', 'admin').eq('activo', true)
-    )
-    
-    return {
-      bartenders: (bartendersResult.data as any)?.length || 0,
-      meseros: (meserosResult.data as any)?.length || 0,
-      admins: (adminsResult.data as any)?.length || 0
-    }
-  },
-
-  async uploadAdminFoto(file: File, usuarioId: string): Promise<string> {
-    const extension = file.name.split('.').pop()
-    const fileName = `${Date.now()}.${extension}`
-    const path = `admins/${usuarioId}/${fileName}`
-    
-    try {
-      const { error: uploadError } = await safeSupabase.client.storage
-        .from('barranco-images')
-        .upload(path, file, {
-          cacheControl: '3600',
-          upsert: true,
-          contentType: file.type
-        })
-      
-      if (uploadError) throw uploadError
-      
-      const { data: urlData } = await safeSupabase.client.storage
-        .from('barranco-images')
-        .getPublicUrl(path)
-      
-      const avatarUrl = urlData.publicUrl
-      
-      await safeSupabase.safeUpdate('usuarios', { avatar_url: avatarUrl }, { id: usuarioId })
-      
-      return avatarUrl
-    } catch (error) {
-      throw formatSupabaseError(error)
-    }
+    return { userId, email: data.email, rol: data.rol, nip: nipGenerado || undefined }
   }
 }

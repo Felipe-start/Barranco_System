@@ -48,27 +48,23 @@ export default function BartenderLoginPage() {
         throw new Error('Ingresa el NIP de 6 dígitos')
       }
 
-      // 1. Verificar el NIP en la tabla usuarios
       const result = await userService.verificarSoloCodigo(codigo.trim())
       
       if (!result || !result.valido) {
         throw new Error(result?.mensaje || 'NIP inválido o expirado')
       }
 
-      // 2. Cerrar sesión actual si existe
       const { data: { session } } = await supabase.auth.getSession()
       if (session) {
         await supabase.auth.signOut()
       }
 
-      // 3. Intentar iniciar sesión
       const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email: result.email,
         password: codigo.trim()
       })
 
       if (signInError) {
-        // Si el usuario no existe en Auth, crearlo
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email: result.email,
           password: codigo.trim(),
@@ -82,7 +78,6 @@ export default function BartenderLoginPage() {
         })
 
         if (signUpError) {
-          // Si ya está registrado, intentar login nuevamente
           if (signUpError.message.includes('already registered')) {
             const { data: retryData, error: retryError } = await supabase.auth.signInWithPassword({
               email: result.email,
@@ -90,7 +85,6 @@ export default function BartenderLoginPage() {
             })
             if (retryError) throw retryError
             if (retryData?.user) {
-              // Limpiar el NIP
               await supabase
                 .from('usuarios')
                 .update({
@@ -108,7 +102,6 @@ export default function BartenderLoginPage() {
         }
 
         if (signUpData.user) {
-          // Limpiar el NIP
           await supabase
             .from('usuarios')
             .update({
@@ -124,7 +117,6 @@ export default function BartenderLoginPage() {
       }
 
       if (data?.user) {
-        // Limpiar el NIP
         await supabase
           .from('usuarios')
           .update({

@@ -1,12 +1,12 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Card, CardContent } from '@/components/ui/card'
+import { Key, Clock, RefreshCw, CheckCircle, AlertCircle, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Key, RefreshCw, Clock, CheckCircle, AlertCircle } from 'lucide-react'
 import { userService } from '@/lib/services/userService'
-import { useAuth } from '@/hooks/useAuth'
+import { createClient } from '@/lib/supabase/client'
+import { useToast } from '@/hooks/use-toast'
 
 interface UserNIPCardProps {
   usuarioId: string
@@ -15,144 +15,157 @@ interface UserNIPCardProps {
 }
 
 export function UserNIPCard({ usuarioId, usuarioNombre, onNIPChange }: UserNIPCardProps) {
-  const { user } = useAuth()
   const [loading, setLoading] = useState(false)
-  const [nip, setNip] = useState<string | null>(null)
-  const [expiracion, setExpiracion] = useState<string | null>(null)
-  const [expirado, setExpirado] = useState(false)
-  const [generando, setGenerando] = useState(false)
-
-  const cargarNIP = async () => {
-    try {
-      const data = await userService.getNIP(usuarioId)
-      setNip(data.codigo)
-      setExpiracion(data.expiracion)
-      
-      if (data.expiracion) {
-        const exp = new Date(data.expiracion)
-        setExpirado(exp < new Date())
-      }
-    } catch (error) {
-      console.error('Error al cargar NIP:', error)
-    }
-  }
-
-  const generarNuevoNIP = async () => {
-    if (!user) return
-    setGenerando(true)
-    try {
-      const nuevoNIP = await userService.generarNIP(usuarioId, user.id)
-      setNip(nuevoNIP)
-      setExpirado(false)
-      
-      const data = await userService.getNIP(usuarioId)
-      setExpiracion(data.expiracion)
-      
-      if (onNIPChange) onNIPChange()
-      
-      // Mostrar notificación
-      alert(`✅ Nuevo NIP generado para ${usuarioNombre}: ${nuevoNIP}`)
-    } catch (error: any) {
-      alert('Error al generar el NIP: ' + error.message)
-      console.error(error)
-    } finally {
-      setGenerando(false)
-    }
-  }
+  const [nipData, setNipData] = useState<{
+    codigo_acceso: string | null
+    codigo_expiracion: string | null
+  } | null>(null)
+  const [showNip, setShowNip] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const { toast } = useToast()
+  const supabase = createClient()
 
   useEffect(() => {
-    cargarNIP()
+    fetchNIPData()
   }, [usuarioId])
 
-  const formatFecha = (fecha: string | null) => {
-    if (!fecha) return 'Sin fecha'
-    return new Date(fecha).toLocaleString('es-MX', {
-      day: '2-digit',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true
-    })
+  const fetchNIPData = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('usuarios')
+        .select('codigo_acceso, codigo_expiracion')
+        .eq('id', usuarioId)
+        .single()
+
+      if (error) throw error
+      setNipData(data)
+    } catch (error) {
+      console.error('Error fetching NIP data:', error)
+    }
   }
 
-  const getStatusColor = () => {
-    if (!nip) return 'bg-gray-100 text-gray-500'
-    if (expirado) return 'bg-red-100 text-red-700'
-    return 'bg-green-100 text-green-700'
+  const generarNIP = async () => {
+    setGenerating(true)
+    try {
+      const adminUser = await supabase.auth.getUser()
+      const adminId = adminUser.data.user?.id
+
+      if (!adminId) {
+        toast({
+          title: 'Error',
+          description: 'No se pudo identificar al administrador',
+          variant: 'destructive'
+        })
+        return
+      }
+
+      const codigo = await userService.generarNIP(usuarioId, adminId)
+      await fetchNIPData()
+      setShowNip(true)
+      
+      toast({
+        title: '✅ NIP Generado',
+        description: `Nuevo NIP para ${usuarioNombre}: ${codigo}`,
+        variant: 'success'
+      })
+
+      if (onNIPChange) onNIPChange()
+
+      setTimeout(() => setShowNip(false), 30000)
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Error al generar el NIP',
+        variant: 'destructive'
+      })
+    } finally {
+      setGenerating(false)
+    }
   }
 
-  const getStatusText = () => {
-    if (!nip) return 'Sin NIP'
-    if (expirado) return 'Expirado'
-    return 'Activo'
-  }
-
-  const getStatusIcon = () => {
-    if (!nip) return <AlertCircle className="h-3 w-3" />
-    if (expirado) return <AlertCircle className="h-3 w-3" />
-    return <CheckCircle className="h-3 w-3" />
-  }
+  const nip = nipData?.codigo_acceso
+  const expiracion = nipData?.codigo_expiracion
+  const isExpirado = expiracion ? new Date(expiracion) < new Date() : true
+  const tieneNIP = nip && !isExpirado
 
   return (
-    <Card className="border-2 border-blue-100/50 bg-gradient-to-br from-blue-50/50 to-white">
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Key className="h-4 w-4 text-blue-600" />
-              <span className="text-sm font-medium text-gray-700">NIP de Acceso</span>
-              <Badge className={getStatusColor()}>
-                {getStatusIcon()}
-                <span className="ml-1">{getStatusText()}</span>
-              </Badge>
-            </div>
-
-            {nip ? (
-              <>
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl font-bold tracking-widest text-gray-900 font-mono">
-                    {nip}
-                  </span>
-                  <Badge variant="outline" className="text-xs">
-                    <Clock className="h-3 w-3 mr-1" />
-                    {formatFecha(expiracion)}
-                  </Badge>
-                </div>
-                {expirado && (
-                  <p className="text-xs text-red-600">
-                    ⚠️ El NIP ha expirado. Genera uno nuevo.
-                  </p>
-                )}
-                {!expirado && nip && (
-                  <p className="text-xs text-green-600">
-                    ✅ Válido hasta {formatFecha(expiracion)}
-                  </p>
-                )}
-              </>
-            ) : (
-              <p className="text-sm text-gray-500">
-                Este usuario no tiene un NIP asignado
-              </p>
-            )}
-          </div>
-
-          <Button
-            size="sm"
-            className="bg-blue-600 hover:bg-blue-700 text-white"
-            onClick={generarNuevoNIP}
-            disabled={generando}
-          >
-            <RefreshCw className={`h-3 w-3 mr-1 ${generando ? 'animate-spin' : ''}`} />
-            {generando ? 'Generando...' : 'Nuevo NIP'}
-          </Button>
+    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Key className="h-4 w-4 text-gray-500" />
+          <span className="text-sm font-medium text-gray-700">NIP de acceso</span>
         </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs gap-1"
+          onClick={generarNIP}
+          disabled={generating}
+        >
+          {generating ? (
+            <div className="h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <>
+              <RefreshCw className="h-3 w-3" />
+              Generar nuevo
+            </>
+          )}
+        </Button>
+      </div>
 
-        <div className="mt-2 pt-2 border-t border-gray-100">
-          <p className="text-xs text-gray-400">
-            💡 El NIP se actualiza automáticamente cada 24 horas o cuando el administrador lo genera manualmente.
+      {tieneNIP ? (
+        <div className="mt-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge className="bg-green-100 text-green-700 text-xs">
+              <CheckCircle className="h-3 w-3 mr-1" />
+              Activo
+            </Badge>
+            <span className="text-xs text-gray-400 flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              Expira: {new Date(expiracion!).toLocaleString()}
+            </span>
+          </div>
+          {showNip ? (
+            <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg">
+              <p className="text-xs font-medium text-green-700">🎯 NIP actual:</p>
+              <p className="text-xl font-bold text-green-600 tracking-widest font-mono">
+                {nip}
+              </p>
+              <div className="flex items-center gap-2 mt-1">
+                <p className="text-xs text-gray-500">Expira en 24 horas desde su generación</p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-xs text-gray-400 hover:text-gray-600"
+                  onClick={() => setShowNip(false)}
+                >
+                  <EyeOff className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="mt-1 text-xs text-blue-600 hover:text-blue-700"
+              onClick={() => setShowNip(true)}
+            >
+              <Eye className="h-3 w-3 mr-1" />
+              Mostrar NIP
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="mt-2">
+          <Badge className="bg-gray-100 text-gray-500 text-xs">
+            <AlertCircle className="h-3 w-3 mr-1" />
+            Sin NIP activo
+          </Badge>
+          <p className="text-xs text-gray-400 mt-1">
+            Genera un nuevo NIP para que el usuario pueda acceder
           </p>
         </div>
-      </CardContent>
-    </Card>
+      )}
+    </div>
   )
 }

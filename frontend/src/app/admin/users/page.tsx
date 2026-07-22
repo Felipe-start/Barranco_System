@@ -1,17 +1,20 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { 
-  Search, Users, ArrowLeft, RefreshCw, Plus, 
-  UserPlus, Filter, Mail, Phone, Edit, Trash2,
-  UserCog, UserCheck, UserX, Key, Shield
+  Search, Users, ArrowLeft, RefreshCw, User, 
+  CheckCircle, XCircle, Plus,
+  Edit, Trash2, Camera, Mail, Phone,
+  Shield, ShieldCheck, ShieldAlert, Eye, EyeOff,
+  Loader2
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
   Dialog,
   DialogContent,
@@ -32,22 +35,46 @@ import {
 import { useAuth } from '@/hooks/useAuth'
 import { createClient } from '@/lib/supabase/client'
 import { userService } from '@/lib/services/userService'
-import UserForm from '@/components/admin/UserForm'
+import { useToast } from '@/hooks/use-toast'
 
 export default function UsersManagementPage() {
   const { user } = useAuth()
+  const { toast } = useToast()
   const supabase = createClient()
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
-  const [filterRol, setFilterRol] = useState('todos')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [selectedUser, setSelectedUser] = useState<any>(null)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [userToDelete, setUserToDelete] = useState<any>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
-  const [showNip, setShowNip] = useState<{ id: string; nip: string } | null>(null)
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const editFileInputRef = useRef<HTMLInputElement>(null)
+
+  // Formulario para nuevo usuario
+  const [formData, setFormData] = useState({
+    nombre: '',
+    apellido: '',
+    email: '',
+    telefono: '',
+    password: '',
+    confirmPassword: '',
+  })
+  const [avatarFile, setAvatarFile] = useState<File | null>(null)
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
+
+  // Formulario para editar usuario
+  const [editFormData, setEditFormData] = useState({
+    nombre: '',
+    apellido: '',
+    email: '',
+    telefono: '',
+  })
+  const [editAvatarFile, setEditAvatarFile] = useState<File | null>(null)
+  const [editAvatarPreview, setEditAvatarPreview] = useState<string | null>(null)
 
   useEffect(() => {
     fetchUsers()
@@ -56,40 +83,273 @@ export default function UsersManagementPage() {
   const fetchUsers = async () => {
     setLoading(true)
     try {
-      const data = await userService.getAll()
+      const data = await userService.getAll('admin')
       setUsers(data || [])
     } catch (error) {
       console.error('Error fetching users:', error)
+      toast({
+        title: 'Error',
+        description: 'No se pudieron cargar los administradores',
+        variant: 'destructive'
+      })
     } finally {
       setLoading(false)
     }
   }
 
-  const handleAutorizar = async (usuarioId: string) => {
-    if (!user) return
-    setActionLoading(usuarioId)
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>, isEdit: boolean = false) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (isEdit) {
+      setEditAvatarFile(file)
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setEditAvatarPreview(reader.result as string)
+      }
+      reader.readAsDataURL(file)
+    } else {
+      setAvatarFile(file)
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setAvatarPreview(reader.result as string)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setActionLoading('create')
+
+    if (formData.password !== formData.confirmPassword) {
+      toast({
+        title: 'Error',
+        description: 'Las contraseñas no coinciden',
+        variant: 'destructive'
+      })
+      setActionLoading(null)
+      return
+    }
+
+    if (formData.password.length < 6) {
+      toast({
+        title: 'Error',
+        description: 'La contraseña debe tener al menos 6 caracteres',
+        variant: 'destructive'
+      })
+      setActionLoading(null)
+      return
+    }
+
     try {
-      const codigo = await userService.autorizarUsuario(usuarioId, user.id)
-      setShowNip({ id: usuarioId, nip: codigo })
-      await fetchUsers()
-      setTimeout(() => setShowNip(null), 30000)
+      // Crear usuario en Auth
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: {
+            nombre: formData.nombre,
+            apellido: formData.apellido,
+            rol: 'admin',
+          }
+        }
+      })
+
+      if (authError) throw authError
+      if (!authData.user) throw new Error('No se pudo crear el usuario')
+
+      const userId = authData.user.id
+
+      // Crear en tabla usuarios
+      const { error: userError } = await supabase
+        .from('usuarios')
+        .insert([{
+          id: userId,
+          email: formData.email,
+          password_hash: 'auth_managed',
+          nombre: formData.nombre,
+          apellido: formData.apellido,
+          rol: 'admin',
+          telefono: formData.telefono || null,
+          activo: true,
+          email_verificado: true,
+          pin: Math.floor(100000 + Math.random() * 900000).toString(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }])
+
+      if (userError) throw userError
+
+      // Subir avatar si se seleccionó
+      if (avatarFile) {
+        try {
+          const extension = avatarFile.name.split('.').pop()
+          const fileName = `${Date.now()}.${extension}`
+          const path = `admins/${userId}/${fileName}`
+          
+          const { error: uploadError } = await supabase.storage
+            .from('barranco-images')
+            .upload(path, avatarFile, {
+              cacheControl: '3600',
+              upsert: true,
+              contentType: avatarFile.type
+            })
+          
+          if (!uploadError) {
+            const { data: urlData } = supabase.storage
+              .from('barranco-images')
+              .getPublicUrl(path)
+            
+            await supabase
+              .from('usuarios')
+              .update({ avatar_url: urlData.publicUrl })
+              .eq('id', userId)
+          }
+        } catch (error) {
+          console.error('Error uploading avatar:', error)
+        }
+      }
+
+      toast({
+        title: '✅ Administrador creado',
+        description: `${formData.nombre} ${formData.apellido} ha sido creado correctamente`,
+        variant: 'success'
+      })
+
+      // Resetear formulario
+      setFormData({
+        nombre: '',
+        apellido: '',
+        email: '',
+        telefono: '',
+        password: '',
+        confirmPassword: '',
+      })
+      setAvatarFile(null)
+      setAvatarPreview(null)
+      setIsDialogOpen(false)
+      fetchUsers()
+
     } catch (error: any) {
-      alert('Error al autorizar el usuario: ' + (error.message || 'Error desconocido'))
-      console.error(error)
+      console.error('Error creating user:', error)
+      toast({
+        title: 'Error',
+        description: error.message || 'Error al crear el administrador',
+        variant: 'destructive'
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleEditUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedUser) return
+
+    setActionLoading('edit')
+    try {
+      // Actualizar usuario
+      await userService.updateUser(selectedUser.id, {
+        nombre: editFormData.nombre,
+        apellido: editFormData.apellido,
+        phone_number: editFormData.telefono,
+      })
+
+      // Subir nueva foto si se seleccionó
+      if (editAvatarFile) {
+        try {
+          const extension = editAvatarFile.name.split('.').pop()
+          const fileName = `${Date.now()}.${extension}`
+          const path = `admins/${selectedUser.id}/${fileName}`
+          
+          const { error: uploadError } = await supabase.storage
+            .from('barranco-images')
+            .upload(path, editAvatarFile, {
+              cacheControl: '3600',
+              upsert: true,
+              contentType: editAvatarFile.type
+            })
+          
+          if (!uploadError) {
+            const { data: urlData } = supabase.storage
+              .from('barranco-images')
+              .getPublicUrl(path)
+            
+            await supabase
+              .from('usuarios')
+              .update({ avatar_url: urlData.publicUrl })
+              .eq('id', selectedUser.id)
+          }
+        } catch (error) {
+          console.error('Error uploading avatar:', error)
+        }
+      }
+
+      toast({
+        title: '✅ Administrador actualizado',
+        description: `${editFormData.nombre} ${editFormData.apellido} ha sido actualizado`,
+        variant: 'success'
+      })
+
+      setIsEditDialogOpen(false)
+      setSelectedUser(null)
+      setEditAvatarFile(null)
+      setEditAvatarPreview(null)
+      fetchUsers()
+
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Error al actualizar el administrador',
+        variant: 'destructive'
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleDeleteUser = async () => {
+    if (!userToDelete) return
+
+    setActionLoading('delete')
+    try {
+      await userService.deleteUser(userToDelete.id)
+      await fetchUsers()
+      setIsDeleteDialogOpen(false)
+      setUserToDelete(null)
+      toast({
+        title: '✅ Administrador eliminado',
+        description: `${userToDelete.nombre} ${userToDelete.apellido} ha sido eliminado`,
+        variant: 'success'
+      })
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Error al eliminar el administrador',
+        variant: 'destructive'
+      })
     } finally {
       setActionLoading(null)
     }
   }
 
   const handleDesactivar = async (id: string) => {
-    if (!confirm('¿Desactivar este usuario?')) return
     setActionLoading(id)
     try {
       await userService.desactivarUsuario(id)
       await fetchUsers()
+      toast({
+        title: '✅ Usuario desactivado',
+        description: 'El administrador ha sido desactivado',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al desactivar el usuario')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al desactivar el administrador',
+        variant: 'destructive'
+      })
     } finally {
       setActionLoading(null)
     }
@@ -100,39 +360,33 @@ export default function UsersManagementPage() {
     try {
       await userService.activarUsuario(id)
       await fetchUsers()
+      toast({
+        title: '✅ Usuario activado',
+        description: 'El administrador ha sido activado',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al activar el usuario')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al activar el administrador',
+        variant: 'destructive'
+      })
     } finally {
       setActionLoading(null)
     }
   }
 
-  const handleDeleteUser = async () => {
-    if (!userToDelete) return
-    try {
-      await userService.deleteUser(userToDelete.id)
-      await fetchUsers()
-      setIsDeleteDialogOpen(false)
-      setUserToDelete(null)
-      alert('Usuario eliminado correctamente')
-    } catch (error) {
-      alert('Error al eliminar el usuario')
-      console.error(error)
-    }
-  }
-
-  const getRolBadge = (rol: string) => {
-    switch (rol) {
-      case 'admin':
-        return <Badge className="bg-purple-100 text-purple-700">👑 Admin</Badge>
-      case 'bartender':
-        return <Badge className="bg-green-100 text-green-700">🍸 Bartender</Badge>
-      case 'mesero':
-        return <Badge className="bg-orange-100 text-orange-700">🍽️ Mesero</Badge>
-      default:
-        return <Badge className="bg-gray-100 text-gray-700">{rol}</Badge>
-    }
+  const openEditDialog = (user: any) => {
+    setSelectedUser(user)
+    setEditFormData({
+      nombre: user.nombre || '',
+      apellido: user.apellido || '',
+      email: user.email || '',
+      telefono: user.phone_number || '',
+    })
+    setEditAvatarPreview(user.avatar_url || null)
+    setEditAvatarFile(null)
+    setIsEditDialogOpen(true)
   }
 
   const getInitials = (nombre: string, apellido: string) => {
@@ -140,23 +394,20 @@ export default function UsersManagementPage() {
   }
 
   const getColor = (index: number) => {
-    const colors = ['bg-blue-600', 'bg-green-600', 'bg-purple-600', 'bg-orange-600', 'bg-red-600', 'bg-teal-600', 'bg-pink-600']
+    const colors = ['bg-blue-600', 'bg-purple-600', 'bg-indigo-600', 'bg-rose-600', 'bg-emerald-600']
     return colors[index % colors.length]
   }
 
   const filteredUsers = users.filter(u => {
-    const matchesSearch = 
-      u.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.apellido?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.email?.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesRol = filterRol === 'todos' || u.rol === filterRol
-    return matchesSearch && matchesRol
+    const fullName = `${u.nombre} ${u.apellido}`.toLowerCase()
+    return fullName.includes(searchTerm.toLowerCase()) ||
+           u.email?.toLowerCase().includes(searchTerm.toLowerCase())
   })
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
       </div>
     )
   }
@@ -173,8 +424,11 @@ export default function UsersManagementPage() {
               </Button>
             </Link>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Usuarios</h1>
-              <p className="text-sm text-gray-500">Gestiona todos los usuarios del sistema</p>
+              <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                <Shield className="h-6 w-6 text-blue-600" />
+                Administradores
+              </h1>
+              <p className="text-sm text-gray-500">Gestiona los administradores del sistema</p>
             </div>
           </div>
           <div className="flex gap-2">
@@ -182,23 +436,151 @@ export default function UsersManagementPage() {
               <DialogTrigger asChild>
                 <Button className="bg-blue-600 hover:bg-blue-700">
                   <Plus className="h-4 w-4 mr-2" />
-                  Nuevo Usuario
+                  Nuevo Administrador
                 </Button>
               </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
-                    <UserPlus className="h-5 w-5" />
-                    Crear Nuevo Usuario
+                    <ShieldCheck className="h-5 w-5 text-blue-600" />
+                    Crear Nuevo Administrador
                   </DialogTitle>
                 </DialogHeader>
-                <UserForm
-                  onSuccess={() => {
-                    setIsDialogOpen(false)
-                    fetchUsers()
-                  }}
-                  onCancel={() => setIsDialogOpen(false)}
-                />
+                <form onSubmit={handleCreateUser} className="space-y-4">
+                  {/* Foto de perfil */}
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="relative group">
+                      <Avatar className="h-24 w-24 border-4 border-blue-100">
+                        {avatarPreview ? (
+                          <AvatarImage src={avatarPreview} alt="Preview" />
+                        ) : null}
+                        <AvatarFallback className="text-3xl bg-blue-600 text-white">
+                          {formData.nombre && formData.apellido 
+                            ? getInitials(formData.nombre, formData.apellido)
+                            : <User className="h-10 w-10" />}
+                        </AvatarFallback>
+                      </Avatar>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => handleImageChange(e, false)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="absolute -bottom-1 -right-1 p-1.5 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors shadow-lg"
+                      >
+                        <Camera className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-500">Haz clic en la cámara para agregar foto</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="nombre">Nombre</Label>
+                      <Input
+                        id="nombre"
+                        value={formData.nombre}
+                        onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="apellido">Apellido</Label>
+                      <Input
+                        id="apellido"
+                        value={formData.apellido}
+                        onChange={(e) => setFormData({ ...formData, apellido: e.target.value })}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="email">Email</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="telefono">Teléfono</Label>
+                    <Input
+                      id="telefono"
+                      value={formData.telefono}
+                      onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
+                      placeholder="+52 123 456 7890"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="password">Contraseña</Label>
+                      <Input
+                        id="password"
+                        type="password"
+                        value={formData.password}
+                        onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                        required
+                        minLength={6}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="confirmPassword">Confirmar Contraseña</Label>
+                      <Input
+                        id="confirmPassword"
+                        type="password"
+                        value={formData.confirmPassword}
+                        onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setIsDialogOpen(false)
+                        setFormData({
+                          nombre: '',
+                          apellido: '',
+                          email: '',
+                          telefono: '',
+                          password: '',
+                          confirmPassword: '',
+                        })
+                        setAvatarFile(null)
+                        setAvatarPreview(null)
+                      }}
+                      className="flex-1"
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      type="submit"
+                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                      disabled={actionLoading === 'create'}
+                    >
+                      {actionLoading === 'create' ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Creando...
+                        </>
+                      ) : (
+                        'Crear Administrador'
+                      )}
+                    </Button>
+                  </div>
+                </form>
               </DialogContent>
             </Dialog>
             <Button variant="outline" onClick={fetchUsers}>
@@ -207,37 +589,20 @@ export default function UsersManagementPage() {
           </div>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-4 mb-6">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-            <Input
-              placeholder="Buscar usuarios..."
-              className="pl-9"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-          <select
-            className="px-4 py-2 border rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={filterRol}
-            onChange={(e) => setFilterRol(e.target.value)}
-          >
-            <option value="todos">Todos los roles</option>
-            <option value="admin">👑 Administradores</option>
-            <option value="bartender">🍸 Bartenders</option>
-            <option value="mesero">🍽️ Meseros</option>
-          </select>
+        <div className="relative mb-6">
+          <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+          <Input
+            placeholder="Buscar administradores..."
+            className="pl-9"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filteredUsers.map((usuario, index) => {
             const isActivo = usuario.activo
-            const esAdmin = usuario.rol === 'admin'
-            const tieneCodigo = usuario.codigo_acceso
-            const codigoExpiracion = usuario.codigo_expiracion
-              ? new Date(usuario.codigo_expiracion)
-              : null
-            const isExpirado = codigoExpiracion && codigoExpiracion < new Date()
+            const isCurrentUser = usuario.id === user?.id
 
             return (
               <Card key={usuario.id} className={`hover:shadow-lg transition-all duration-300 border-t-4 ${
@@ -245,7 +610,10 @@ export default function UsersManagementPage() {
               }`}>
                 <CardContent className="p-4">
                   <div className="flex items-start gap-3">
-                    <Avatar className={`h-14 w-14 ${getColor(index)}`}>
+                    <Avatar className={`h-16 w-16 ${getColor(index)}`}>
+                      {usuario.avatar_url ? (
+                        <AvatarImage src={usuario.avatar_url} alt={usuario.nombre} />
+                      ) : null}
                       <AvatarFallback className="text-white text-lg font-semibold">
                         {getInitials(usuario.nombre, usuario.apellido)}
                       </AvatarFallback>
@@ -255,74 +623,45 @@ export default function UsersManagementPage() {
                         <h3 className="font-semibold text-gray-900 truncate">
                           {usuario.nombre} {usuario.apellido}
                         </h3>
-                        {getRolBadge(usuario.rol)}
+                        <Badge className={isActivo ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}>
+                          {isActivo ? 'Activo' : 'Inactivo'}
+                        </Badge>
                       </div>
                       <p className="text-sm text-gray-500 flex items-center gap-1">
                         <Mail className="h-3 w-3" />
                         {usuario.email}
                       </p>
-                      {usuario.telefono && (
+                      {usuario.phone_number && (
                         <p className="text-xs text-gray-400 flex items-center gap-1">
                           <Phone className="h-3 w-3" />
-                          {usuario.telefono}
+                          {usuario.phone_number}
                         </p>
                       )}
-                      {showNip && showNip.id === usuario.id && (
-                        <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg">
-                          <p className="text-xs font-medium text-green-700">🎯 NIP de acceso:</p>
-                          <p className="text-xl font-bold text-green-600 tracking-widest">{showNip.nip}</p>
-                          <p className="text-xs text-gray-500">Expira en 24 horas</p>
-                        </div>
-                      )}
-                      {tieneCodigo && !showNip && !esAdmin && (
-                        <div className="flex items-center gap-1 mt-1">
-                          <Key className="h-3 w-3 text-green-600" />
-                          <span className="text-xs text-green-600 font-mono">{tieneCodigo}</span>
-                          <span className="text-xs text-gray-400">
-                            {isExpirado ? '(Expirado)' : `Expira: ${codigoExpiracion?.toLocaleTimeString()}`}
-                          </span>
-                        </div>
+                      {isCurrentUser && (
+                        <Badge className="mt-1 bg-blue-100 text-blue-700 text-xs">
+                          <Shield className="h-3 w-3 mr-1" />
+                          Tú
+                        </Badge>
                       )}
                     </div>
                   </div>
 
-                  <div className="mt-3 flex items-center justify-between pt-3 border-t">
-                    <div className="flex items-center gap-1">
-                      <Badge className={isActivo ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}>
-                        {isActivo ? '✅ Activo' : '❌ Inactivo'}
-                      </Badge>
-                    </div>
-                    <div className="flex gap-1">
-                      {!esAdmin && isActivo && (
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          className="text-green-600 border-green-200 hover:bg-green-50"
-                          onClick={() => handleAutorizar(usuario.id)}
-                          disabled={actionLoading === usuario.id}
-                        >
-                          {actionLoading === usuario.id ? (
-                            <div className="animate-spin h-3 w-3 border-2 border-green-600 border-t-transparent rounded-full" />
-                          ) : (
-                            <>
-                              <Key className="h-3 w-3 mr-1" />
-                              Nuevo NIP
-                            </>
-                          )}
-                        </Button>
-                      )}
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pt-3 border-t">
+                    <Badge className="bg-purple-100 text-purple-700">
+                      <Shield className="h-3 w-3 mr-1" />
+                      Administrador
+                    </Badge>
+                    <div className="flex flex-wrap gap-1">
                       <Button 
                         size="sm" 
                         variant="outline"
                         className="text-blue-600 border-blue-200 hover:bg-blue-50"
-                        onClick={() => {
-                          setSelectedUser(usuario)
-                          setIsEditDialogOpen(true)
-                        }}
+                        onClick={() => openEditDialog(usuario)}
                       >
-                        <Edit className="h-3 w-3" />
+                        <Edit className="h-3 w-3 mr-1" />
+                        Editar
                       </Button>
-                      {!esAdmin && (
+                      {!isCurrentUser && (
                         <>
                           {isActivo ? (
                             <Button 
@@ -332,7 +671,11 @@ export default function UsersManagementPage() {
                               onClick={() => handleDesactivar(usuario.id)}
                               disabled={actionLoading === usuario.id}
                             >
-                              <UserX className="h-3 w-3" />
+                              {actionLoading === usuario.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <XCircle className="h-3 w-3" />
+                              )}
                             </Button>
                           ) : (
                             <Button 
@@ -342,7 +685,11 @@ export default function UsersManagementPage() {
                               onClick={() => handleActivar(usuario.id)}
                               disabled={actionLoading === usuario.id}
                             >
-                              <UserCheck className="h-3 w-3" />
+                              {actionLoading === usuario.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <CheckCircle className="h-3 w-3" />
+                              )}
                             </Button>
                           )}
                           <Button 
@@ -368,44 +715,132 @@ export default function UsersManagementPage() {
 
         {filteredUsers.length === 0 && (
           <div className="text-center py-12">
-            <Users className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-            <p className="text-gray-500">No se encontraron usuarios</p>
+            <Shield className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+            <p className="text-gray-500">No se encontraron administradores</p>
+            <Button 
+              className="mt-4 bg-blue-600 hover:bg-blue-700"
+              onClick={() => setIsDialogOpen(true)}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Crear primer administrador
+            </Button>
           </div>
         )}
       </div>
 
-      {/* Dialog para editar usuario */}
+      {/* Dialog para editar */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <UserCog className="h-5 w-5" />
-              Editar Usuario
+              <ShieldCheck className="h-5 w-5 text-blue-600" />
+              Editar Administrador
             </DialogTitle>
           </DialogHeader>
-          {selectedUser && (
-            <UserForm
-              isEdit={true}
-              userId={selectedUser.id}
-              defaultValues={{
-                nombre: selectedUser.nombre,
-                apellido: selectedUser.apellido,
-                rol: selectedUser.rol,
-                pin: selectedUser.pin,
-                telefono: selectedUser.telefono || '',
-                email: selectedUser.email,
-              }}
-              onSuccess={() => {
-                setIsEditDialogOpen(false)
-                setSelectedUser(null)
-                fetchUsers()
-              }}
-              onCancel={() => {
-                setIsEditDialogOpen(false)
-                setSelectedUser(null)
-              }}
-            />
-          )}
+          <form onSubmit={handleEditUser} className="space-y-4">
+            <div className="flex flex-col items-center gap-3">
+              <div className="relative group">
+                <Avatar className="h-24 w-24 border-4 border-blue-100">
+                  {editAvatarPreview ? (
+                    <AvatarImage src={editAvatarPreview} alt="Preview" />
+                  ) : null}
+                  <AvatarFallback className="text-3xl bg-blue-600 text-white">
+                    {editFormData.nombre && editFormData.apellido 
+                      ? getInitials(editFormData.nombre, editFormData.apellido)
+                      : <User className="h-10 w-10" />}
+                  </AvatarFallback>
+                </Avatar>
+                <input
+                  ref={editFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => handleImageChange(e, true)}
+                />
+                <button
+                  type="button"
+                  onClick={() => editFileInputRef.current?.click()}
+                  className="absolute -bottom-1 -right-1 p-1.5 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors shadow-lg"
+                >
+                  <Camera className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">Haz clic en la cámara para cambiar foto</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-nombre">Nombre</Label>
+                <Input
+                  id="edit-nombre"
+                  value={editFormData.nombre}
+                  onChange={(e) => setEditFormData({ ...editFormData, nombre: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-apellido">Apellido</Label>
+                <Input
+                  id="edit-apellido"
+                  value={editFormData.apellido}
+                  onChange={(e) => setEditFormData({ ...editFormData, apellido: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit-email">Email</Label>
+              <Input
+                id="edit-email"
+                type="email"
+                value={editFormData.email}
+                disabled
+                className="bg-gray-50"
+              />
+              <p className="text-xs text-gray-400">El email no se puede cambiar</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit-telefono">Teléfono</Label>
+              <Input
+                id="edit-telefono"
+                value={editFormData.telefono}
+                onChange={(e) => setEditFormData({ ...editFormData, telefono: e.target.value })}
+                placeholder="+52 123 456 7890"
+              />
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsEditDialogOpen(false)
+                  setSelectedUser(null)
+                  setEditAvatarFile(null)
+                  setEditAvatarPreview(null)
+                }}
+                className="flex-1"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                disabled={actionLoading === 'edit'}
+              >
+                {actionLoading === 'edit' ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Guardando...
+                  </>
+                ) : (
+                  'Guardar Cambios'
+                )}
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -415,14 +850,25 @@ export default function UsersManagementPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>¿Estás seguro?</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta acción eliminará al usuario <strong>{userToDelete?.nombre} {userToDelete?.apellido}</strong>.
+              Esta acción eliminará al administrador <strong>{userToDelete?.nombre} {userToDelete?.apellido}</strong>.
               Esta acción no se puede deshacer.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteUser} className="bg-red-600 hover:bg-red-700">
-              Eliminar
+            <AlertDialogAction 
+              onClick={handleDeleteUser} 
+              className="bg-red-600 hover:bg-red-700"
+              disabled={actionLoading === 'delete'}
+            >
+              {actionLoading === 'delete' ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Eliminando...
+                </>
+              ) : (
+                'Eliminar'
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

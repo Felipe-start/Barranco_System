@@ -35,9 +35,11 @@ import { userService } from '@/lib/services/userService'
 import { createClient } from '@/lib/supabase/client'
 import BartenderForm from '@/components/admin/BartenderForm'
 import { UserNIPCard } from '@/components/admin/UserNIPCard'
+import { useToast } from '@/hooks/use-toast'
 
 export default function BartendersPage() {
   const { user } = useAuth()
+  const { toast } = useToast()
   const supabase = createClient()
   const [bartenders, setBartenders] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -47,6 +49,7 @@ export default function BartendersPage() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [selectedBartender, setSelectedBartender] = useState<any>(null)
   const [uploadingImage, setUploadingImage] = useState<string | null>(null)
+  const [showNip, setShowNip] = useState<{ id: string; nip: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -60,20 +63,32 @@ export default function BartendersPage() {
       setBartenders(data || [])
     } catch (error) {
       console.error('Error fetching bartenders:', error)
+      toast({
+        title: 'Error',
+        description: 'No se pudieron cargar los bartenders',
+        variant: 'destructive'
+      })
     } finally {
       setLoading(false)
     }
   }
 
   const handleDesactivar = async (usuarioId: string) => {
-    if (!confirm('¿Desactivar este usuario?')) return
     setActionLoading(usuarioId)
     try {
       await userService.desactivarUsuario(usuarioId)
       await fetchBartenders()
+      toast({
+        title: '✅ Usuario desactivado',
+        description: 'El usuario ha sido desactivado correctamente',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al desactivar el usuario')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al desactivar el usuario',
+        variant: 'destructive'
+      })
     } finally {
       setActionLoading(null)
     }
@@ -84,9 +99,49 @@ export default function BartendersPage() {
     try {
       await userService.activarUsuario(usuarioId)
       await fetchBartenders()
+      toast({
+        title: '✅ Usuario activado',
+        description: 'El usuario ha sido activado correctamente',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al activar el usuario')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al activar el usuario',
+        variant: 'destructive'
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleGenerarNIP = async (usuarioId: string) => {
+    setActionLoading(usuarioId)
+    try {
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      if (!currentUser) {
+        toast({
+          title: 'Error',
+          description: 'No se pudo identificar al administrador',
+          variant: 'destructive'
+        })
+        return
+      }
+      const codigo = await userService.generarNIP(usuarioId, currentUser.id)
+      setShowNip({ id: usuarioId, nip: codigo })
+      await fetchBartenders()
+      toast({
+        title: '✅ NIP Generado',
+        description: `Nuevo NIP: ${codigo}`,
+        variant: 'success'
+      })
+      setTimeout(() => setShowNip(null), 30000)
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Error al generar el NIP',
+        variant: 'destructive'
+      })
     } finally {
       setActionLoading(null)
     }
@@ -99,20 +154,37 @@ export default function BartendersPage() {
       await fetchBartenders()
       setIsDeleteDialogOpen(false)
       setSelectedBartender(null)
+      toast({
+        title: '✅ Bartender eliminado',
+        description: 'El bartender ha sido eliminado correctamente',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al eliminar el bartender')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al eliminar el bartender',
+        variant: 'destructive'
+      })
     }
   }
 
   const handleUploadImage = async (bartenderId: string, file: File) => {
     setUploadingImage(bartenderId)
     try {
-      const url = await userService.uploadBartenderFoto(file, bartenderId, selectedBartender?.usuario_id || '')
+      const bartender = bartenders.find(b => b.id === bartenderId)
+      const url = await userService.uploadBartenderFoto(file, bartenderId, bartender?.usuario_id || '')
       await fetchBartenders()
+      toast({
+        title: '✅ Foto actualizada',
+        description: 'La foto del bartender ha sido actualizada',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al subir la imagen')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al subir la imagen',
+        variant: 'destructive'
+      })
     } finally {
       setUploadingImage(null)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -264,7 +336,6 @@ export default function BartendersPage() {
                     </div>
                   </div>
 
-                  {/* Componente NIP */}
                   <div className="mt-3">
                     <UserNIPCard
                       usuarioId={usuario.id}

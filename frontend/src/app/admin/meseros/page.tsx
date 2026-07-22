@@ -35,9 +35,11 @@ import { userService } from '@/lib/services/userService'
 import { createClient } from '@/lib/supabase/client'
 import MeseroForm from '@/components/admin/MeseroForm'
 import { UserNIPCard } from '@/components/admin/UserNIPCard'
+import { useToast } from '@/hooks/use-toast'
 
 export default function MeserosPage() {
   const { user } = useAuth()
+  const { toast } = useToast()
   const supabase = createClient()
   const [meseros, setMeseros] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -47,6 +49,7 @@ export default function MeserosPage() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [selectedMesero, setSelectedMesero] = useState<any>(null)
   const [uploadingImage, setUploadingImage] = useState<string | null>(null)
+  const [showNip, setShowNip] = useState<{ id: string; nip: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -60,20 +63,32 @@ export default function MeserosPage() {
       setMeseros(data || [])
     } catch (error) {
       console.error('Error fetching meseros:', error)
+      toast({
+        title: 'Error',
+        description: 'No se pudieron cargar los meseros',
+        variant: 'destructive'
+      })
     } finally {
       setLoading(false)
     }
   }
 
   const handleDesactivar = async (usuarioId: string) => {
-    if (!confirm('¿Desactivar este usuario?')) return
     setActionLoading(usuarioId)
     try {
       await userService.desactivarUsuario(usuarioId)
       await fetchMeseros()
+      toast({
+        title: '✅ Usuario desactivado',
+        description: 'El usuario ha sido desactivado correctamente',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al desactivar el usuario')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al desactivar el usuario',
+        variant: 'destructive'
+      })
     } finally {
       setActionLoading(null)
     }
@@ -84,9 +99,49 @@ export default function MeserosPage() {
     try {
       await userService.activarUsuario(usuarioId)
       await fetchMeseros()
+      toast({
+        title: '✅ Usuario activado',
+        description: 'El usuario ha sido activado correctamente',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al activar el usuario')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al activar el usuario',
+        variant: 'destructive'
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleGenerarNIP = async (usuarioId: string) => {
+    setActionLoading(usuarioId)
+    try {
+      const { data: { user: currentUser } } = await supabase.auth.getUser()
+      if (!currentUser) {
+        toast({
+          title: 'Error',
+          description: 'No se pudo identificar al administrador',
+          variant: 'destructive'
+        })
+        return
+      }
+      const codigo = await userService.generarNIP(usuarioId, currentUser.id)
+      setShowNip({ id: usuarioId, nip: codigo })
+      await fetchMeseros()
+      toast({
+        title: '✅ NIP Generado',
+        description: `Nuevo NIP: ${codigo}`,
+        variant: 'success'
+      })
+      setTimeout(() => setShowNip(null), 30000)
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Error al generar el NIP',
+        variant: 'destructive'
+      })
     } finally {
       setActionLoading(null)
     }
@@ -99,20 +154,37 @@ export default function MeserosPage() {
       await fetchMeseros()
       setIsDeleteDialogOpen(false)
       setSelectedMesero(null)
+      toast({
+        title: '✅ Mesero eliminado',
+        description: 'El mesero ha sido eliminado correctamente',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al eliminar el mesero')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al eliminar el mesero',
+        variant: 'destructive'
+      })
     }
   }
 
   const handleUploadImage = async (meseroId: string, file: File) => {
     setUploadingImage(meseroId)
     try {
-      const url = await userService.uploadMeseroFoto(file, meseroId, selectedMesero?.usuario_id || '')
+      const mesero = meseros.find(m => m.id === meseroId)
+      const url = await userService.uploadMeseroFoto(file, meseroId, mesero?.usuario_id || '')
       await fetchMeseros()
+      toast({
+        title: '✅ Foto actualizada',
+        description: 'La foto del mesero ha sido actualizada',
+        variant: 'success'
+      })
     } catch (error) {
-      alert('Error al subir la imagen')
-      console.error(error)
+      toast({
+        title: 'Error',
+        description: 'Error al subir la imagen',
+        variant: 'destructive'
+      })
     } finally {
       setUploadingImage(null)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -265,7 +337,6 @@ export default function MeserosPage() {
                     </div>
                   </div>
 
-                  {/* Componente NIP */}
                   <div className="mt-3">
                     <UserNIPCard
                       usuarioId={usuario.id}
